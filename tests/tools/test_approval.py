@@ -2271,11 +2271,13 @@ class TestApprovalTimeoutIsNotConsent:
         os.environ.pop("HERMES_CRON_SESSION", None)
         os.environ["HERMES_GATEWAY_SESSION"] = "1"
         os.environ["HERMES_SESSION_KEY"] = self.SESSION_KEY
+        self._session_token = mod.set_current_session_key(self.SESSION_KEY)
 
     def teardown_method(self):
         from tools import approval as mod
         mod._gateway_queues.clear()
         mod._gateway_notify_cbs.clear()
+        mod.reset_current_session_key(self._session_token)
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)

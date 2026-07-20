@@ -747,6 +747,7 @@ compression:
   target_ratio: 0.20                                # Fraction of threshold to preserve as recent tail
   protect_last_n: 20                                # Min recent messages to keep uncompressed
   protect_first_n: 3                                # Non-system head messages pinned across compactions (0 = pin nothing)
+  checkpoint_required: false                        # Require a provider checkpoint before lossy compression
   hygiene_hard_message_limit: 5000                  # Gateway safety valve — see below
 
 # The summarization model/provider is configured under auxiliary:
@@ -760,6 +761,20 @@ auxiliary:
 :::info Legacy config migration
 Older configs with `compression.summary_model`, `compression.summary_provider`, and `compression.summary_base_url` are automatically migrated to `auxiliary.compression.*` on first load (config version 17). No manual action needed.
 :::
+
+With `checkpoint_required: true`, lossy compression proceeds only when the
+active memory provider advertises pre-compress checkpoint API version 1 and
+successfully checkpoints an isolated full-fidelity copy of the transcript.
+Every compatible provider must succeed and return a non-empty receipt; the
+receipt must fit the 6,000-character lossless host limit. Hermes passes each
+provider and the required-mode compression engine its own deep copy, requires
+explicit `memory_context` support from the engine, validates the result before
+adoption, and appends the receipt to the marked persisted summary.
+Missing or incompatible providers, empty/oversized receipts, engine capability
+gaps, and checkpoint errors block compression rather than silently degrading.
+Codex app-server native compaction cannot expose the required snapshot and is
+therefore blocked while this option is enabled. Gateway manual compression and
+automatic hygiene initialize memory providers when this option is active.
 
 `hygiene_hard_message_limit` is a gateway-only **pre-compression safety valve**. It exists to break a death spiral: when API calls keep disconnecting on an oversized session, the gateway never receives token-usage data, so the token-based threshold can't fire, so the transcript keeps growing and disconnects get worse. This count-based floor fires on message count alone (always known, regardless of API failures) to force compression and recover the session. Default `5000` — far above any normal session, including large-context (1M+) models doing thousands of short turns, which compress on the token threshold long before this. Raise it further for unusual platforms, lower it to force more aggressive compression. Editing this value on a running gateway takes effect on the next message (see below).
 
@@ -1962,6 +1977,18 @@ Control how Hermes handles potentially dangerous commands:
 ```yaml
 approvals:
   mode: smart   # smart | manual | off
+  smart:
+    reviewers: 1        # 1 (historical default) or 2 (quorum)
+    unresolved: human   # human or deny
+    audit_required: false
+
+# Used only when approvals.smart.reviewers is 2. A different configured
+# provider/model can reduce correlated failures; Hermes does not claim or
+# verify credential/provider diversity at runtime.
+auxiliary:
+  approval_secondary:
+    provider: auto
+    model: ""
 ```
 
 | Mode | Behavior |
@@ -1971,6 +1998,46 @@ approvals:
 | `off` | Skip all approval checks. Equivalent to `HERMES_YOLO_MODE=true`. **Use with caution.** |
 
 Smart mode is particularly useful for reducing approval fatigue — it lets the agent work more autonomously on safe operations while still catching genuinely destructive commands.
+
+With `reviewers: 2`, Hermes sends the same exact command and scanner evidence in
+separate calls to a security reviewer (`auxiliary.approval`) and an operations
+reviewer (`auxiliary.approval_secondary`). Neither reviewer sees the other's
+result. Both reviewers must return the SHA-256 of the original command and a
+second SHA-256 covering the command hash, scanner description, environment,
+host-access flag, and scanner findings. Hermes verifies both returned hashes
+before accepting either review. Both must return a structured
+`APPROVE` result for automatic execution. A `DENY` or `UNCERTAIN` result
+follows `unresolved`: `human` preserves the normal owner approval flow, while
+`deny` blocks immediately without waiting for a prompt.
+
+Quorum decisions are appended to
+`~/.hermes/logs/approval-attestations.jsonl`. Records contain the command hash,
+request hash, verdict, bounded claim counts, and SHA-256 commitments to reviewer
+claims and route/model metadata. Arbitrary reviewer prose, session identifiers,
+provider/model labels, and command text are never written to the JSONL record;
+their commitments preserve integrity correlation without making escaped or
+otherwise encoded commands recoverable from the log. `audit_required: true`
+blocks an otherwise approved quorum if the record cannot be appended and
+fsynced. Session or permanent authorization is persisted only after that final
+required record is durable. This is an application audit log with `0600`
+permissions on POSIX — it is not an immutable external ledger. When
+`unresolved: human` reaches an owner, Hermes appends a second record with the
+final `human_approve`, `human_deny`, or timeout outcome; a required final audit
+failure blocks execution even after owner approval.
+
+The quorum applies to flagged terminal commands and gateway/ask `execute_code`
+scripts that reach an existing smart gate. It does not broaden those gates:
+commands bypassed by yolo/off, existing allowlists, cron/container policy, or
+“no scanner warning” remain outside it. `execute_code` is reviewed as one whole
+script, not as a per-command review of nested terminal calls. Plugin pre-tool
+escalation keeps its own approval path. Configure that surface separately rather
+than assuming the quorum covers every execution path.
+
+Invalid quorum settings fail closed instead of silently degrading to one
+reviewer. `reviewers` must be the integer `1` or `2`, `unresolved` must be
+`human` or `deny`, and `audit_required` must be a YAML boolean. Explicit `null`
+and unknown keys in the user or managed `approvals.smart` block are also
+rejected before defaults can hide them.
 
 :::warning
 Setting `approvals.mode: off` disables all safety checks for terminal commands. Only use this in trusted, sandboxed environments.

@@ -39,7 +39,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from agent.context_engine import sanitize_memory_context
+from agent.context_engine import MEMORY_CONTEXT_MAX_CHARS, sanitize_memory_context
+from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_API_VERSION
 from agent.model_metadata import estimate_request_tokens_rough
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ COMPACTION_STATUS_MARKER = "Compacting context"
 COMPACTION_STATUS = (
     f"🗜️ {COMPACTION_STATUS_MARKER} — summarizing earlier conversation so I can continue..."
 )
+CHECKPOINT_RECEIPT_MARKER = "[PRE-COMPRESSION CHECKPOINT RECEIPT]"
 
 
 def _builtin_memory_prompt_snapshot(agent: Any) -> Optional[Tuple[str, str]]:
@@ -118,6 +120,17 @@ def _cached_prompt_reflects_builtin_memory(agent: Any, cached_prompt: str) -> bo
             # empty/disabled — stale; rebuild.
             return False
     return True
+
+
+class CompressionCheckpointUnavailable(RuntimeError):
+    """Raised when required durable pre-compress checkpointing is unavailable."""
+
+
+def _checkpoint_blocked(reason: str) -> CompressionCheckpointUnavailable:
+    return CompressionCheckpointUnavailable(
+        "BLOCKED_MISSING_PREREQUISITE: required pre-compress checkpoint "
+        f"unavailable: {reason}"
+    )
 
 
 def _lock_api_is_absent_on_session_db(lock_db: Any) -> bool:
@@ -737,7 +750,15 @@ def compress_context(
     # The memory-provider context handoff below is intentionally Hermes-only:
     # the app server does not expose its native summary prompt, so there is no
     # truthful injection point for ``on_pre_compress()`` return text here.
+    checkpoint_required = bool(
+        getattr(agent, "compression_checkpoint_required", False)
+    )
     if getattr(agent, "api_mode", None) == "codex_app_server":
+        if checkpoint_required:
+            raise _checkpoint_blocked(
+                "codex_app_server owns the authoritative thread and does not "
+                "expose a truthful pre-compaction transcript boundary"
+            )
         return _compress_context_via_codex_app_server(
             agent,
             messages,
@@ -797,7 +818,6 @@ def compress_context(
         f"{approx_tokens:,}" if approx_tokens else "unknown", agent.model,
         focus_topic,
     )
-    agent._emit_status(COMPACTION_STATUS)
 
     # ── Compression lock ────────────────────────────────────────────────
     # Atomic, state.db-backed lock per session_id.  Without this, two
@@ -1023,15 +1043,74 @@ def compress_context(
         # wants surfaced inside the compression summary; capture and forward it
         # instead of silently discarding the provider's return value.
         memory_context = ""
-        if agent._memory_manager:
+        memory_manager = getattr(agent, "_memory_manager", None)
+        if checkpoint_required:
+            supports_checkpoint = getattr(
+                memory_manager, "supports_pre_compress_checkpoint", None
+            )
+            if memory_manager is None or not callable(supports_checkpoint):
+                raise _checkpoint_blocked(
+                    f"no active provider implements checkpoint API "
+                    f"v{PRE_COMPRESS_CHECKPOINT_API_VERSION}"
+                )
             try:
-                _maybe_ctx = agent._memory_manager.on_pre_compress(messages)
+                compatible = bool(
+                    supports_checkpoint(PRE_COMPRESS_CHECKPOINT_API_VERSION)
+                )
+            except Exception as exc:
+                raise _checkpoint_blocked("provider capability probe failed") from exc
+            if not compatible:
+                raise _checkpoint_blocked(
+                    f"active provider does not implement checkpoint API "
+                    f"v{PRE_COMPRESS_CHECKPOINT_API_VERSION}"
+                )
+            try:
+                _maybe_ctx = memory_manager.on_pre_compress(
+                    messages,
+                    require_checkpoint=True,
+                    checkpoint_api_version=PRE_COMPRESS_CHECKPOINT_API_VERSION,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Required pre-compress checkpoint failed (%s)",
+                    type(exc).__name__,
+                )
+                raise _checkpoint_blocked(
+                    f"provider checkpoint API v{PRE_COMPRESS_CHECKPOINT_API_VERSION} failed"
+                ) from exc
+            if not isinstance(_maybe_ctx, str) or not _maybe_ctx.strip():
+                raise _checkpoint_blocked("provider returned no durable checkpoint receipt")
+            if len(_maybe_ctx.strip()) > MEMORY_CONTEXT_MAX_CHARS:
+                raise _checkpoint_blocked(
+                    "provider checkpoint receipt exceeds the lossless host limit"
+                )
+            memory_context = sanitize_memory_context(_maybe_ctx)
+            if not memory_context:
+                raise _checkpoint_blocked("provider returned no usable checkpoint receipt")
+        elif memory_manager:
+            try:
+                # Keep the historical optional-hook transcript shape exactly:
+                # legacy providers may depend on system/tool messages. The
+                # direct-transcript filter is part of the explicit required
+                # checkpoint contract only.
+                _maybe_ctx = memory_manager.on_pre_compress(messages)
                 if isinstance(_maybe_ctx, str):
                     memory_context = sanitize_memory_context(_maybe_ctx)
             except Exception:
                 pass
 
         compress_fn = agent.context_compressor.compress
+        if checkpoint_required:
+            try:
+                engine_parameters = inspect.signature(compress_fn).parameters
+            except (TypeError, ValueError) as exc:
+                raise _checkpoint_blocked(
+                    "compression engine capability cannot be inspected"
+                ) from exc
+            if "memory_context" not in engine_parameters:
+                raise _checkpoint_blocked(
+                    "compression engine lacks explicit memory_context support"
+                )
         compress_kwargs = _supported_compression_kwargs(
             compress_fn,
             current_tokens=approx_tokens,
@@ -1039,6 +1118,10 @@ def compress_context(
             force=force,
             memory_context=memory_context,
         )
+        # A compression status is truthful only after every fail-closed gate
+        # (session lock, ownership, checkpoint, and engine capability) has
+        # succeeded and the lossy compressor is about to run.
+        agent._emit_status(COMPACTION_STATUS)
         if memory_context.strip() and "memory_context" not in compress_kwargs:
             engine_name = getattr(
                 agent.context_compressor,
@@ -1057,7 +1140,39 @@ def compress_context(
                 )
 
         messages_before_compression = copy.deepcopy(messages)
-        compressed = compress_fn(messages, **compress_kwargs)
+        compression_input = (
+            copy.deepcopy(messages_before_compression)
+            if checkpoint_required
+            else messages
+        )
+        compressed = compress_fn(compression_input, **compress_kwargs)
+        if checkpoint_required:
+            summary_message = next(
+                (
+                    message
+                    for message in compressed
+                    if isinstance(message, dict)
+                    and bool(message.get("_compressed_summary"))
+                ),
+                None,
+            )
+            if summary_message is None:
+                raise _checkpoint_blocked(
+                    "compression engine returned no marked summary for checkpoint receipt"
+                )
+            receipt = f"{CHECKPOINT_RECEIPT_MARKER}\n{memory_context}"
+            summary_content = summary_message.get("content")
+            if isinstance(summary_content, str):
+                summary_message["content"] = f"{summary_content.rstrip()}\n\n{receipt}"
+            elif isinstance(summary_content, list):
+                summary_message["content"] = [
+                    *summary_content,
+                    {"type": "text", "text": receipt},
+                ]
+            else:
+                raise _checkpoint_blocked(
+                    "compression engine returned an unsupported summary content shape"
+                )
     except BaseException:
         # ANY exception after lock acquisition — memory hook, capability
         # inspection, engine lookup, or compress() — must release the lock so

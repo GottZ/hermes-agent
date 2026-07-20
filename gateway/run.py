@@ -56,7 +56,7 @@ from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.async_utils import consume_detached_task_result, safe_schedule_threadsafe
 from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 from agent.i18n import t
-from hermes_cli.config import cfg_get
+from hermes_cli.config import cfg_get, load_config_readonly
 from hermes_cli.fallback_config import get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
@@ -12532,7 +12532,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                     model=_hyg_model,
                                     max_iterations=4,
                                     quiet_mode=True,
-                                    skip_memory=True,
+                                    # Required checkpoints apply to automatic
+                                    # gateway hygiene too; do not construct a
+                                    # provider-less temporary agent in that mode.
+                                    skip_memory=not bool(
+                                        cfg_get(
+                                            load_config_readonly(),
+                                            "compression",
+                                            "checkpoint_required",
+                                            default=False,
+                                        )
+                                    ),
                                     enabled_toolsets=["memory"],
                                     session_id=session_entry.session_id,
                                     session_db=_hyg_session_db,

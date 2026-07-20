@@ -2040,6 +2040,9 @@ class AIAgent:
                     codex_message_items=msg.get("codex_message_items") if role == "assistant" else None,
                     timestamp=_row_timestamp,
                     api_content=_row_api_content,
+                    _compressed_summary=bool(
+                        msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+                    ),
                 )
                 msg[_DB_PERSISTED_MARKER] = True
             # The intrinsic markers are now the sole source of truth. Reset the

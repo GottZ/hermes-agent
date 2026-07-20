@@ -1149,10 +1149,6 @@ def run_conversation(
                 if getattr(_compressor, "context_length", 0) else "unknown",
                 compression_attempts,
             )
-            agent._emit_status(
-                f"📦 Pre-API compression: ~{request_pressure_tokens:,} tokens "
-                f"near the context/output limit. Compacting before the next model call."
-            )
             messages, active_system_prompt = agent._compress_context(
                 messages,
                 system_message,

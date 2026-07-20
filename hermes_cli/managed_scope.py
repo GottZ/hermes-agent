@@ -125,6 +125,24 @@ def load_managed_config() -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def load_managed_config_strict() -> dict:
+    """Read managed config without silently hiding malformed security policy."""
+    managed_dir = get_managed_dir()
+    if managed_dir is None:
+        return {}
+    config_path = managed_dir / "config.yaml"
+    try:
+        with open(config_path, encoding="utf-8") as config_file:
+            parsed = yaml.safe_load(config_file)
+    except FileNotFoundError:
+        return {}
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError("managed config.yaml root must be a mapping")
+    return parsed
+
+
 def load_managed_env() -> Dict[str, str]:
     """Parsed managed .env (KEY=VALUE), or {} when absent (fail-open)."""
     managed_dir = get_managed_dir()

@@ -487,6 +487,54 @@ def _append_text_to_content(content: Any, text: str, *, prepend: bool = False) -
     return text + rendered if prepend else rendered + text
 
 
+def _extract_merged_prior_content(content: Any) -> Optional[Any]:
+    """Recover the real tail content wrapped ahead of a merged summary."""
+    if isinstance(content, str):
+        if _MERGED_SUMMARY_DELIMITER not in content:
+            return None
+        prior = content.split(_MERGED_SUMMARY_DELIMITER, 1)[0]
+        header = _MERGED_PRIOR_CONTEXT_HEADER + "\n"
+        if prior.startswith(header):
+            prior = prior[len(header):]
+        if prior.endswith("\n\n"):
+            prior = prior[:-2]
+        return prior
+    if not isinstance(content, list):
+        return None
+
+    restored: list[Any] = []
+    found_delimiter = False
+    for item in content:
+        if isinstance(item, str):
+            text = item
+            item_kind = "string"
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            text = item["text"]
+            item_kind = "block"
+        else:
+            restored.append(item)
+            continue
+
+        if not restored and text == _MERGED_PRIOR_CONTEXT_HEADER + "\n":
+            continue
+        if _MERGED_SUMMARY_DELIMITER in text:
+            prefix = text.split(_MERGED_SUMMARY_DELIMITER, 1)[0]
+            if prefix.endswith("\n\n"):
+                prefix = prefix[:-2]
+            if prefix:
+                if item_kind == "string":
+                    restored.append(prefix)
+                else:
+                    assert isinstance(item, dict)
+                    updated_item: dict[str, Any] = item.copy()
+                    updated_item["text"] = prefix
+                    restored.append(updated_item)
+            found_delimiter = True
+            break
+        restored.append(item)
+    return restored if found_delimiter else None
+
+
 def _strip_image_parts_from_parts(parts: Any) -> Any:
     """Strip image parts from an OpenAI-style content-parts list.
 
@@ -2667,8 +2715,8 @@ This compaction should PRIORITISE preserving all information related to the focu
 
         Callers (frontends, CLI, gateway) can use this to distinguish context
         compaction summaries from real assistant or user messages without
-        relying on content-prefix heuristics.  The flag is in-process only —
-        the wire sanitizers strip underscore-prefixed keys before API calls.
+        relying on content-prefix heuristics. SessionDB persists the flag, while
+        wire sanitizers strip underscore-prefixed keys before API calls.
         """
         if not isinstance(message, dict):
             return False
@@ -2779,8 +2827,30 @@ This compaction should PRIORITISE preserving all information related to the focu
     ) -> tuple[Optional[int], str]:
         """Find the newest handoff summary inside a compression window."""
         for idx in range(end - 1, start - 1, -1):
-            content = messages[idx].get("content")
-            if cls._is_context_summary_content(content):
+            message = messages[idx]
+            content = message.get("content")
+            text = _content_text_for_contains(content)
+            has_metadata = cls._has_compressed_summary_metadata(message)
+            has_prefix = cls._is_context_summary_content(content)
+            has_durable_marker = (
+                _SUMMARY_END_MARKER in text
+                or _MERGED_SUMMARY_DELIMITER in text
+            )
+            # Compatibility for pre-metadata persisted handoffs is deliberately
+            # narrow: historical summaries occupied the first non-system user
+            # slot. Do not classify arbitrary later user text by prefix alone.
+            stripped_text = text.lstrip()
+            current_prefix = stripped_text.startswith(SUMMARY_PREFIX)
+            structured_handoff = (
+                HISTORICAL_TASK_HEADING.lower() in stripped_text.lower()
+            )
+            canonical_prefix = (
+                idx == start
+                and message.get("role") in {"user", "assistant"}
+                and has_prefix
+                and (structured_handoff or (current_prefix and has_durable_marker))
+            )
+            if has_metadata or canonical_prefix:
                 return idx, cls._strip_summary_prefix(_content_text_for_contains(content))
         return None, ""
 
@@ -3448,6 +3518,17 @@ This compaction should PRIORITISE preserving all information related to the focu
             # into the summarizer prompt via the iterative-update path.
             self._previous_summary = None
 
+        # A fresh compressor (for example after resume) protects the first
+        # ``protect_first_n`` messages again. If a persisted handoff summary
+        # sits inside that head, carry its body forward through
+        # ``_previous_summary`` but do not copy the stale summary message into
+        # the rebuilt transcript alongside the replacement summary below.
+        protected_summary_idx = (
+            summary_idx
+            if summary_idx is not None and summary_idx < compress_start
+            else None
+        )
+
         if not self.quiet_mode:
             logger.info(
                 "Context compression triggered (%d tokens >= %d threshold)",
@@ -3539,7 +3620,21 @@ This compaction should PRIORITISE preserving all information related to the focu
 
         # Phase 4: Assemble compressed message list
         compressed = []
+        protected_summary_insert_at = None
         for i in range(compress_start):
+            if i == protected_summary_idx:
+                prior_content = _extract_merged_prior_content(
+                    messages[i].get("content")
+                )
+                if prior_content is not None:
+                    restored = _fresh_compaction_message_copy(messages[i])
+                    restored["content"] = prior_content
+                    restored.pop(COMPRESSED_SUMMARY_METADATA_KEY, None)
+                    drop_stale_api_content(restored)
+                    compressed.append(restored)
+                else:
+                    protected_summary_insert_at = len(compressed)
+                continue
             msg = _fresh_compaction_message_copy(messages[i])
             if i == 0 and msg.get("role") == "system":
                 existing = msg.get("content")
@@ -3566,7 +3661,12 @@ This compaction should PRIORITISE preserving all information related to the focu
             )
 
         _merge_summary_into_tail = False
-        last_head_role = messages[compress_start - 1].get("role", "user") if compress_start > 0 else "user"
+        surviving_head = list(compressed)
+        last_head_role = (
+            surviving_head[-1].get("role", "user")
+            if surviving_head
+            else "user"
+        )
         first_tail_role = messages[compress_end].get("role", "user") if compress_end < n_messages else "user"
         # When the only protected head message is the system prompt, the
         # summary becomes the first *visible* message in the API request
@@ -3595,8 +3695,8 @@ This compaction should PRIORITISE preserving all information related to the focu
         # always has at least one user turn.
         if not _force_user_leading:
             _user_survives = any(
-                messages[i].get("role") == "user"
-                for i in range(0, compress_start)
+                message.get("role") == "user"
+                for message in surviving_head
             ) or any(
                 messages[i].get("role") == "user"
                 for i in range(compress_end, n_messages)
@@ -3622,6 +3722,21 @@ This compaction should PRIORITISE preserving all information related to the focu
                 # of inserting a standalone message that breaks alternation.
                 _merge_summary_into_tail = True
 
+        if (
+            protected_summary_insert_at is not None
+            and protected_summary_insert_at < len(compressed)
+        ):
+            # Replace a summary found inside the protected head at its original
+            # position. Keeping its role preserves the already-valid
+            # alternation with protected neighbours; moving the replacement to
+            # the end of the head could make those neighbours adjacent.
+            assert protected_summary_idx is not None
+            prior_role = messages[protected_summary_idx].get("role")
+            summary_role = (
+                prior_role if prior_role in {"user", "assistant"} else "user"
+            )
+            _merge_summary_into_tail = False
+
         # When the summary lands as a standalone role="user" message,
         # weak models read the verbatim "## Active Task" quote of a past
         # user request as fresh input (#11475, #14521).
@@ -3633,11 +3748,15 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = summary + "\n\n" + _SUMMARY_END_MARKER
 
         if not _merge_summary_into_tail:
-            compressed.append({
+            summary_message = {
                 "role": summary_role,
                 "content": summary,
                 COMPRESSED_SUMMARY_METADATA_KEY: True,
-            })
+            }
+            if protected_summary_insert_at is None:
+                compressed.append(summary_message)
+            else:
+                compressed.insert(protected_summary_insert_at, summary_message)
 
         for i in range(compress_end, n_messages):
             msg = _fresh_compaction_message_copy(messages[i])

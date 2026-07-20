@@ -1477,6 +1477,9 @@ DEFAULT_CONFIG = {
                                       # 0 for long-running rolling-compaction sessions
                                       # where you want nothing pinned except the
                                       # system prompt + rolling summary + recent tail.
+        "checkpoint_required": False,  # Fail closed before lossy compaction unless an
+                                        # active memory provider confirms checkpoint API
+                                        # compatibility and completes the checkpoint.
         "abort_on_summary_failure": False,  # When True, auto-compression that fails
                                       # to generate a summary (aux LLM errored / returned
                                       # non-JSON / timed out) aborts entirely instead of
@@ -1675,6 +1678,17 @@ DEFAULT_CONFIG = {
             "timeout": 30,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+        },
+        # Optional second smart-approval reviewer. A separately configured
+        # provider/model reduces correlated review failures when quorum is on.
+        "approval_secondary": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 30,
+            "extra_body": {},
+            "reasoning_effort": "",
         },
         "mcp": {
             "provider": "auto",
@@ -2676,6 +2690,17 @@ DEFAULT_CONFIG = {
         "mode": "smart",
         "timeout": 60,
         "cron_mode": "deny",
+        "smart": {
+            # 1 preserves the historical path. 2 requires exact-command-bound
+            # security and operations reviews to both approve.
+            "reviewers": 1,
+            # human preserves historical escalation; deny blocks any
+            # DENY/UNCERTAIN quorum without waiting for an owner.
+            "unresolved": "human",
+            # Block an otherwise-approved quorum if its application audit
+            # record cannot be durably appended.
+            "audit_required": False,
+        },
         # User-defined deny rules: fnmatch globs matched against terminal
         # commands. A match blocks the command unconditionally — BEFORE the
         # --yolo / /yolo / mode=off bypass — making this the user-editable
@@ -7081,6 +7106,63 @@ def read_raw_config() -> Dict[str, Any]:
             data = {}
         _RAW_CONFIG_CACHE[path_key] = (cache_key[0], cache_key[1], copy.deepcopy(data))
         return data
+
+
+def read_raw_config_strict() -> Dict[str, Any]:
+    """Read user config without conflating absent, malformed, and non-mapping YAML.
+
+    Security-policy callers use this fail-closed variant before defaults are
+    merged. An absent or empty file is ``{}``; unreadable, malformed, and
+    non-mapping files raise.
+    """
+    with _CONFIG_LOCK:
+        config_path = get_config_path()
+        try:
+            with open(config_path, encoding="utf-8") as config_file:
+                data = fast_safe_load(config_file)
+        except FileNotFoundError:
+            return {}
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise ValueError("config.yaml root must be a mapping")
+        return data
+
+
+def validate_raw_compression_checkpoint_config() -> None:
+    """Reject raw checkpoint config that default merging would weaken silently."""
+    from hermes_cli import managed_scope
+
+    sources = (
+        ("user", read_raw_config_strict()),
+        (
+            "managed",
+            getattr(managed_scope, "load_managed_config_strict")(),
+        ),
+    )
+    for source_name, raw_config in sources:
+        if "compression" not in raw_config:
+            continue
+        compression = raw_config["compression"]
+        if not isinstance(compression, dict):
+            raise ValueError(f"{source_name} compression config must be a mapping")
+        checkpoint_like_keys = {
+            str(key)
+            for key in compression
+            if "checkpoint" in str(key).lower()
+        }
+        unknown_checkpoint_keys = checkpoint_like_keys - {"checkpoint_required"}
+        if unknown_checkpoint_keys:
+            names = ", ".join(sorted(unknown_checkpoint_keys))
+            raise ValueError(
+                f"unknown {source_name} compression checkpoint key(s): {names}"
+            )
+        if "checkpoint_required" not in compression:
+            continue
+        if type(compression["checkpoint_required"]) is not bool:
+            raise ValueError(
+                f"{source_name} compression.checkpoint_required must be a boolean"
+            )
 
 
 def require_readable_config_before_write(config_path: Optional[Path] = None) -> None:
