@@ -85,6 +85,16 @@ class TestBranchCommandCLI:
         messages = session_db.get_messages_as_conversation(cli_instance.session_id)
         assert len(messages) == 4  # All 4 messages copied
 
+    def test_branch_preserves_compressed_summary_identity(self, cli_instance, session_db):
+        from cli import HermesCLI
+
+        cli_instance.conversation_history[1]["_compressed_summary"] = True
+
+        HermesCLI._handle_branch_command(cli_instance, "/branch")
+
+        messages = session_db.get_messages_as_conversation(cli_instance.session_id)
+        assert messages[1]["_compressed_summary"] is True
+
     def test_branch_preserves_parent_link(self, cli_instance, session_db):
         """The new session should reference the original as parent."""
         from cli import HermesCLI

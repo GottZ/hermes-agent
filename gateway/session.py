@@ -2598,6 +2598,7 @@ class SessionStore:
             # any gateway-side persistence path or the next turn's
             # replay diverges at this row.
             api_content=extract_api_content_sidecar(message),
+            _compressed_summary=bool(message.get("_compressed_summary")),
         )
 
     # Maximum in-memory pending messages per session before dropping the

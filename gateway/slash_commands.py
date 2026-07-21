@@ -4104,6 +4104,7 @@ class GatewaySlashCommandsMixin:
                     # replays the parent's exact wire bytes (warm provider
                     # prompt cache) instead of a full cold prefill.
                     api_content=extract_api_content_sidecar(msg),
+                    _compressed_summary=bool(msg.get("_compressed_summary")),
                 )
             except Exception:
                 pass  # Best-effort copy
