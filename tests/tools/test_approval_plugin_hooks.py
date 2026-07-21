@@ -243,10 +243,10 @@ class TestSmartModeFiresHooks:
         self, isolated_session, monkeypatch, guard, value
     ):
         self._configure(monkeypatch, "approve")
-        force_values = []
+        redaction_modes = []
 
-        def redact(text, *, force=False):
-            force_values.append(force)
+        def redact(text, *, force=False, redact_url_credentials=False):
+            redaction_modes.append((force, redact_url_credentials))
             return f"redacted:{text}"
 
         with (
@@ -256,7 +256,7 @@ class TestSmartModeFiresHooks:
             result = guard(value, "local")
 
         assert result["approved"] is True
-        assert force_values == [True, True]
+        assert redaction_modes == [(True, True), (True, True)]
 
     @pytest.mark.parametrize("guard,value", [
         (check_all_command_guards, "rm -rf /tmp/smart-hook-crash"),

@@ -1676,6 +1676,17 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
+        # Optional second smart-approval reviewer. A separately configured
+        # provider/model reduces correlated review failures when quorum is on.
+        "approval_secondary": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 30,
+            "extra_body": {},
+            "reasoning_effort": "",
+        },
         "mcp": {
             "provider": "auto",
             "model": "",
@@ -2676,6 +2687,17 @@ DEFAULT_CONFIG = {
         "mode": "smart",
         "timeout": 60,
         "cron_mode": "deny",
+        "smart": {
+            # 1 preserves the historical path. 2 requires exact-command-bound
+            # security and operations reviews to both approve.
+            "reviewers": 1,
+            # human preserves historical escalation; deny blocks any
+            # DENY/UNCERTAIN quorum without waiting for an owner.
+            "unresolved": "human",
+            # Block an otherwise-approved quorum if its application audit
+            # record cannot be durably appended.
+            "audit_required": False,
+        },
         # User-defined deny rules: fnmatch globs matched against terminal
         # commands. A match blocks the command unconditionally — BEFORE the
         # --yolo / /yolo / mode=off bypass — making this the user-editable
@@ -7080,6 +7102,27 @@ def read_raw_config() -> Dict[str, Any]:
         if not isinstance(data, dict):
             data = {}
         _RAW_CONFIG_CACHE[path_key] = (cache_key[0], cache_key[1], copy.deepcopy(data))
+        return data
+
+
+def read_raw_config_strict() -> Dict[str, Any]:
+    """Read user config without conflating absent, malformed, and non-mapping YAML.
+
+    Security-policy callers use this fail-closed variant before defaults are
+    merged. An absent or empty file is ``{}``; unreadable, malformed, and
+    non-mapping files raise.
+    """
+    with _CONFIG_LOCK:
+        config_path = get_config_path()
+        try:
+            with open(config_path, encoding="utf-8") as config_file:
+                data = fast_safe_load(config_file)
+        except FileNotFoundError:
+            return {}
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise ValueError("config.yaml root must be a mapping")
         return data
 
 

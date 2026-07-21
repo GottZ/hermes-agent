@@ -1962,6 +1962,18 @@ Control how Hermes handles potentially dangerous commands:
 ```yaml
 approvals:
   mode: smart   # smart | manual | off
+  smart:
+    reviewers: 1        # 1 (historical default) or 2 (quorum)
+    unresolved: human   # human or deny
+    audit_required: false
+
+# Used only when approvals.smart.reviewers is 2. A different configured
+# provider/model can reduce correlated failures; Hermes does not claim or
+# verify credential/provider diversity at runtime.
+auxiliary:
+  approval_secondary:
+    provider: auto
+    model: ""
 ```
 
 | Mode | Behavior |
@@ -1971,6 +1983,46 @@ approvals:
 | `off` | Skip all approval checks. Equivalent to `HERMES_YOLO_MODE=true`. **Use with caution.** |
 
 Smart mode is particularly useful for reducing approval fatigue — it lets the agent work more autonomously on safe operations while still catching genuinely destructive commands.
+
+With `reviewers: 2`, Hermes sends the same exact command and scanner evidence in
+separate calls to a security reviewer (`auxiliary.approval`) and an operations
+reviewer (`auxiliary.approval_secondary`). Neither reviewer sees the other's
+result. Both reviewers must return the SHA-256 of the original command and a
+second SHA-256 covering the command hash, scanner description, environment,
+host-access flag, and scanner findings. Hermes verifies both returned hashes
+before accepting either review. Both must return a structured
+`APPROVE` result for automatic execution. A `DENY` or `UNCERTAIN` result
+follows `unresolved`: `human` preserves the normal owner approval flow, while
+`deny` blocks immediately without waiting for a prompt.
+
+Quorum decisions are appended to
+`~/.hermes/logs/approval-attestations.jsonl`. Records contain the command hash,
+request hash, verdict, bounded claim counts, and SHA-256 commitments to reviewer
+claims and route/model metadata. Arbitrary reviewer prose, session identifiers,
+provider/model labels, and command text are never written to the JSONL record;
+their commitments preserve integrity correlation without making escaped or
+otherwise encoded commands recoverable from the log. `audit_required: true`
+blocks an otherwise approved quorum if the record cannot be appended and
+fsynced. Session or permanent authorization is persisted only after that final
+required record is durable. This is an application audit log with `0600`
+permissions on POSIX — it is not an immutable external ledger. When
+`unresolved: human` reaches an owner, Hermes appends a second record with the
+final `human_approve`, `human_deny`, or timeout outcome; a required final audit
+failure blocks execution even after owner approval.
+
+The quorum applies to flagged terminal commands and gateway/ask `execute_code`
+scripts that reach an existing smart gate. It does not broaden those gates:
+commands bypassed by yolo/off, existing allowlists, cron/container policy, or
+“no scanner warning” remain outside it. `execute_code` is reviewed as one whole
+script, not as a per-command review of nested terminal calls. Plugin pre-tool
+escalation keeps its own approval path. Configure that surface separately rather
+than assuming the quorum covers every execution path.
+
+Invalid quorum settings fail closed instead of silently degrading to one
+reviewer. `reviewers` must be the integer `1` or `2`, `unresolved` must be
+`human` or `deny`, and `audit_required` must be a YAML boolean. Explicit `null`
+and unknown keys in the user or managed `approvals.smart` block are also
+rejected before defaults can hide them.
 
 :::warning
 Setting `approvals.mode: off` disables all safety checks for terminal commands. Only use this in trusted, sandboxed environments.

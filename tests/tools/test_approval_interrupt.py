@@ -34,6 +34,7 @@ class TestApprovalInterrupt:
     def setup_method(self):
         from tools.interrupt import set_interrupt
         from tools import interrupt as _interrupt_mod
+        from tools import approval as _approval_mod
 
         _clear_approval_state()
         # Wipe ALL per-thread interrupt bits — thread idents are recycled by
@@ -42,6 +43,7 @@ class TestApprovalInterrupt:
         with _interrupt_mod._lock:
             _interrupt_mod._interrupted_threads.clear()
         set_interrupt(False)
+        self._saved_get_approval_config = _approval_mod._get_approval_config
         self._saved_env = {
             k: os.environ.get(k)
             for k in ("HERMES_GATEWAY_SESSION", "HERMES_YOLO_MODE",
@@ -54,10 +56,12 @@ class TestApprovalInterrupt:
     def teardown_method(self):
         from tools.interrupt import set_interrupt
         from tools import interrupt as _interrupt_mod
+        from tools import approval as _approval_mod
 
         with _interrupt_mod._lock:
             _interrupt_mod._interrupted_threads.clear()
         set_interrupt(False)
+        _approval_mod._get_approval_config = self._saved_get_approval_config
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
