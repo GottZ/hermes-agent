@@ -3466,6 +3466,17 @@ class AIAgent:
                 self._memory_manager.shutdown_all()
             except Exception:
                 pass
+        checkpoint_manager = getattr(
+            self, "_compression_checkpoint_manager", None
+        )
+        if (
+            checkpoint_manager is not None
+            and checkpoint_manager is not getattr(self, "_memory_manager", None)
+        ):
+            try:
+                checkpoint_manager.shutdown_all()
+            except Exception:
+                pass
         # Notify context engine of session end (flush DAG, close DBs, etc.)
         if hasattr(self, "context_compressor") and self.context_compressor:
             try:

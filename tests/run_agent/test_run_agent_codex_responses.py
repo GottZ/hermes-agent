@@ -1908,8 +1908,16 @@ def test_run_conversation_compresses_mid_turn_before_output_budget_exhaustion(mo
             )
 
     compress_calls = []
+    compression_statuses = []
+    monkeypatch.setattr(
+        agent,
+        "_emit_status",
+        lambda message: compression_statuses.append(message),
+    )
 
     def _fake_compress_context(messages, system_message, *, approx_tokens=None, task_id="default", focus_topic=None):
+        assert compression_statuses == []
+        agent._emit_status("compression started after gate")
         compress_calls.append(approx_tokens)
         return [
             {"role": "user", "content": "[summary of prior tool-heavy work]"},
@@ -1924,6 +1932,7 @@ def test_run_conversation_compresses_mid_turn_before_output_budget_exhaustion(mo
     assert result["final_response"] == "Summary after compaction."
     assert len(compress_calls) == 1
     assert compress_calls[0] >= 15_000
+    assert compression_statuses == ["compression started after gate"]
     assert len(requests) == 2
 
 

@@ -39,9 +39,20 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+PRE_COMPRESS_CHECKPOINT_API_VERSION = 1
+# Private engine/host handshake metadata. The host supplies a fresh token per
+# required gate and strips the key before adopting or persisting the result.
+PRE_COMPRESS_CHECKPOINT_SUMMARY_TOKEN_KEY = "_pre_compress_checkpoint_summary_token"
+
 
 class MemoryProvider(ABC):
     """Abstract base class for memory providers."""
+
+    # Providers that durably checkpoint every successful on_pre_compress()
+    # call and return a non-empty durable receipt may opt into this host
+    # contract by setting the current version.
+    # Version 0 preserves the historical best-effort hook semantics.
+    pre_compress_checkpoint_api_version = 0
 
     @property
     @abstractmethod
@@ -71,9 +82,11 @@ class MemoryProvider(ABC):
           - platform (str): "cli", "telegram", "discord", "cron", etc.
 
         kwargs may also include:
-          - agent_context (str): "primary", "subagent", "cron", or "flush".
-            Providers should skip writes for non-primary contexts (cron system
-            prompts would corrupt user representations).
+          - agent_context (str): "primary", "subagent", "cron", "flush", or
+            "checkpoint_only". Providers should skip ordinary representation
+            writes for non-primary contexts. A checkpoint API provider may
+            persist only its explicit pre-compression checkpoint when the
+            context is "checkpoint_only".
           - agent_identity (str): Profile name (e.g. "coder"). Use for
             per-profile provider identity scoping.
           - agent_workspace (str): Shared workspace name (e.g. "hermes").

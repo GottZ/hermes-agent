@@ -747,6 +747,7 @@ compression:
   target_ratio: 0.20                                # Fraction of threshold to preserve as recent tail
   protect_last_n: 20                                # Min recent messages to keep uncompressed
   protect_first_n: 3                                # Non-system head messages pinned across compactions (0 = pin nothing)
+  checkpoint_required: false                        # Require a provider checkpoint before lossy compression
   hygiene_hard_message_limit: 5000                  # Gateway safety valve — see below
 
 # The summarization model/provider is configured under auxiliary:
@@ -759,6 +760,46 @@ auxiliary:
 
 :::info Legacy config migration
 Older configs with `compression.summary_model`, `compression.summary_provider`, and `compression.summary_base_url` are automatically migrated to `auxiliary.compression.*` on first load (config version 17). No manual action needed.
+:::
+
+With `checkpoint_required: true`, lossy compression proceeds only when the
+active memory provider advertises pre-compress checkpoint API version 1 and
+successfully checkpoints an isolated full-fidelity copy of the transcript.
+Every compatible provider must succeed and return a non-empty receipt; the
+receipt must fit the 6,000-character lossless host limit. Hermes passes each
+provider and the required-mode compression engine its own deep copy, requires
+explicit `memory_context` and checkpoint-summary-token support from the engine,
+validates the result before adoption, and appends the receipt to the marked
+persisted summary. The host creates a fresh opaque token for each gate; only the
+summary carrying that token can receive the receipt, and Hermes removes the
+private token before session persistence.
+Missing or incompatible providers, empty/oversized receipts, engine capability
+gaps, and checkpoint errors block compression rather than silently degrading.
+Codex app-server native compaction cannot expose the required snapshot and is
+therefore blocked while this option is enabled. Gateway manual compression and
+automatic hygiene initialize memory providers when this option is active.
+
+If the compression engine safely makes no semantic change, returns an empty
+result, or explicitly aborts, Hermes keeps the original transcript and does not
+require or attach a summary receipt because no lossy replacement is adopted. A
+changed non-empty result without a new marked summary still fails closed; an old
+summary marker already present in the input cannot satisfy that gate, even when
+the engine modifies the historical summary's content.
+
+:::info Required checkpoints and memory-isolated agents
+`checkpoint_required` applies to every `AIAgent` created under the active
+profile. Delegated subagents, cron jobs, batch workers, and CLI
+`--ignore-rules` agents use `skip_memory=True` so their prompts and turns cannot
+contaminate the primary user representation. In required mode Hermes therefore
+loads the configured provider into a separate checkpoint-only manager with
+`agent_context="checkpoint_only"` and child-specific session lineage.
+
+That manager is used only for the pre-compression capability probe, durable
+checkpoint, receipt, session binding, and shutdown. It is not exposed as memory
+context or tools and does not receive recall, per-turn sync, or end-of-session
+extraction hooks. If the provider is missing, unavailable, incompatible, or
+cannot bind the active child session, compression still fails closed with
+`BLOCKED_MISSING_PREREQUISITE`.
 :::
 
 `hygiene_hard_message_limit` is a gateway-only **pre-compression safety valve**. It exists to break a death spiral: when API calls keep disconnecting on an oversized session, the gateway never receives token-usage data, so the token-based threshold can't fire, so the transcript keeps growing and disconnects get worse. This count-based floor fires on message count alone (always known, regardless of API failures) to force compression and recover the session. Default `5000` — far above any normal session, including large-context (1M+) models doing thousands of short turns, which compress on the token threshold long before this. Raise it further for unusual platforms, lower it to force more aggressive compression. Editing this value on a running gateway takes effect on the next message (see below).

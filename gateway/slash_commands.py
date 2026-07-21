@@ -40,7 +40,12 @@ from gateway.session import (
     build_session_key,
     is_shared_multi_user_session,
 )
-from hermes_cli.config import atomic_config_write, cfg_get, clear_model_endpoint_credentials
+from hermes_cli.config import (
+    atomic_config_write,
+    cfg_get,
+    clear_model_endpoint_credentials,
+    load_config_readonly,
+)
 from utils import (
     atomic_json_write,
     base_url_host_matches,
@@ -3475,7 +3480,17 @@ class GatewaySlashCommandsMixin:
                 model=model,
                 max_iterations=4,
                 quiet_mode=True,
-                skip_memory=True,
+                # A required pre-compress checkpoint must initialize the active
+                # memory provider even for this temporary manual-compression
+                # agent. Preserve the lightweight historical path otherwise.
+                skip_memory=not bool(
+                    cfg_get(
+                        load_config_readonly(),
+                        "compression",
+                        "checkpoint_required",
+                        default=False,
+                    )
+                ),
                 enabled_toolsets=["memory"],
                 session_id=session_entry.session_id,
                 session_db=getattr(self._session_db, "_db", self._session_db),

@@ -47,7 +47,7 @@ from agent.tool_guardrails import (
     ToolCallGuardrailController,
     ToolGuardrailDecision,
 )
-from hermes_cli.config import cfg_get
+from hermes_cli.config import cfg_get, validate_raw_compression_checkpoint_config
 from hermes_cli.timeouts import get_provider_request_timeout
 from hermes_constants import get_hermes_home
 from utils import base_url_host_matches, is_truthy_value
@@ -1374,6 +1374,14 @@ def init_agent(
     except Exception:
         _agent_cfg = {}
 
+    validate_raw_compression_checkpoint_config()
+    _compression_cfg = _agent_cfg.get("compression", {})
+    if not isinstance(_compression_cfg, dict):
+        _compression_cfg = {}
+    compression_checkpoint_required = is_truthy_value(
+        _compression_cfg.get("checkpoint_required"), default=False
+    )
+
     # Codex commentary visibility (display.show_commentary, default true).
     # When true, completed Codex phase=commentary messages are delivered as
     # visible mid-turn updates through the interim message path. When false,
@@ -1427,9 +1435,11 @@ def init_agent(
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
+    mem_config = _agent_cfg.get("memory", {})
+    if not isinstance(mem_config, dict):
+        mem_config = {}
     if not skip_memory:
         try:
-            mem_config = _agent_cfg.get("memory", {})
             agent._memory_enabled = mem_config.get("memory_enabled", False)
             agent._user_profile_enabled = mem_config.get("user_profile_enabled", False)
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
@@ -1448,6 +1458,7 @@ def init_agent(
     # Memory provider plugin (external — one at a time, alongside built-in)
     # Reads memory.provider from config to select which plugin to activate.
     agent._memory_manager = None
+    agent._compression_checkpoint_manager = None
     if not skip_memory:
         try:
             _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
@@ -1504,7 +1515,10 @@ def init_agent(
                         _init_kwargs["agent_workspace"] = "hermes"
                     except Exception:
                         pass
-                    agent._memory_manager.initialize_all(**_init_kwargs)
+                    agent._memory_manager.initialize_all(
+                        **_init_kwargs,
+                        require_success=compression_checkpoint_required,
+                    )
                     _ra().logger.info("Memory provider '%s' activated", _mem_provider_name)
                 else:
                     _ra().logger.debug("Memory provider '%s' not found or not available", _mem_provider_name)
@@ -1512,6 +1526,39 @@ def init_agent(
         except Exception as _mpe:
             _ra().logger.warning("Memory provider plugin init failed: %s", _mpe)
             agent._memory_manager = None
+        agent._compression_checkpoint_manager = agent._memory_manager
+    elif compression_checkpoint_required:
+        # Memory-isolated agents (delegation, cron, batch, --ignore-rules) must
+        # neither weaken a required checkpoint nor reuse the primary manager
+        # across session/provenance scopes. This manager is checkpoint-only: it
+        # is not exposed as memory context, tools, recall, or per-turn sync.
+        try:
+            _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
+            if _mem_provider_name and _mem_provider_name.strip():
+                from agent.memory_manager import MemoryManager as _MemoryManager
+                from plugins.memory import load_memory_provider as _load_mem
+
+                _checkpoint_manager = _MemoryManager()
+                _checkpoint_provider = _load_mem(_mem_provider_name)
+                if _checkpoint_provider and _checkpoint_provider.is_available():
+                    _checkpoint_manager.add_provider(_checkpoint_provider)
+                if _checkpoint_manager.providers:
+                    _checkpoint_manager.initialize_all(
+                        session_id=agent.session_id,
+                        require_success=True,
+                        platform=platform or "cli",
+                        hermes_home=str(get_hermes_home()),
+                        agent_context="checkpoint_only",
+                        parent_session_id=parent_session_id or "",
+                    )
+                    agent._compression_checkpoint_manager = _checkpoint_manager
+                    _ra().logger.info(
+                        "Checkpoint-only memory provider '%s' activated",
+                        _mem_provider_name,
+                    )
+        except Exception as _mpe:
+            _ra().logger.warning("Checkpoint-only provider init failed: %s", _mpe)
+            agent._compression_checkpoint_manager = None
 
     from agent.memory_manager import inject_memory_provider_tools as _inject_memory_provider_tools
     _inject_memory_provider_tools(agent)
@@ -1596,9 +1643,6 @@ def init_agent(
     # Initialize context compressor for automatic context management
     # Compresses conversation when approaching model's context limit
     # Configuration via config.yaml (compression section)
-    _compression_cfg = _agent_cfg.get("compression", {})
-    if not isinstance(_compression_cfg, dict):
-        _compression_cfg = {}
     compression_threshold = float(_compression_cfg.get("threshold", 0.50))
     # Per-model/route compaction-threshold override. Codex gpt-5.4 / gpt-5.5
     # raise to 85% (the Codex backend caps both families at 272K, so the
@@ -1931,6 +1975,7 @@ def init_agent(
             pass
     agent.compression_enabled = compression_enabled
     agent.compression_in_place = compression_in_place
+    agent.compression_checkpoint_required = compression_checkpoint_required
     agent.codex_app_server_auto_compaction = codex_app_server_auto_compaction
 
     # Reject models whose context window is below the minimum required

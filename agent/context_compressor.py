@@ -32,6 +32,7 @@ from agent.model_metadata import (
     get_model_context_length,
     estimate_messages_tokens_rough,
 )
+from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_SUMMARY_TOKEN_KEY
 from agent.redact import redact_sensitive_text
 from agent.turn_context import drop_stale_api_content
 
@@ -3316,6 +3317,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         focus_topic: Optional[str] = None,
         force: bool = False,
         memory_context: str = "",
+        checkpoint_summary_token: str = "",
     ) -> List[Dict[str, Any]]:
         """Compress conversation messages by summarizing middle turns.
 
@@ -3339,6 +3341,9 @@ This compaction should PRIORITISE preserving all information related to the focu
                 an auto-compression abort.  Auto-compress callers pass False.
             memory_context: Optional provider-supplied context to preserve in
                 the summary prompt. Whitespace-only values are ignored.
+            checkpoint_summary_token: Host-generated nonce copied only onto the
+                summary created by this compression call. Required checkpoint
+                callers use it to reject historical summary markers.
         """
         # Reset per-call summary failure state — callers inspect these fields
         # after compress() returns to decide whether to surface a warning.
@@ -3633,11 +3638,16 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = summary + "\n\n" + _SUMMARY_END_MARKER
 
         if not _merge_summary_into_tail:
-            compressed.append({
+            summary_message = {
                 "role": summary_role,
                 "content": summary,
                 COMPRESSED_SUMMARY_METADATA_KEY: True,
-            })
+            }
+            if checkpoint_summary_token:
+                summary_message[PRE_COMPRESS_CHECKPOINT_SUMMARY_TOKEN_KEY] = (
+                    checkpoint_summary_token
+                )
+            compressed.append(summary_message)
 
         for i in range(compress_end, n_messages):
             msg = _fresh_compaction_message_copy(messages[i])
@@ -3666,6 +3676,10 @@ This compaction should PRIORITISE preserving all information related to the focu
                 # Mark the merged message so frontends can identify it as
                 # containing a compression summary prefix.
                 msg[COMPRESSED_SUMMARY_METADATA_KEY] = True
+                if checkpoint_summary_token:
+                    msg[PRE_COMPRESS_CHECKPOINT_SUMMARY_TOKEN_KEY] = (
+                        checkpoint_summary_token
+                    )
                 # Content rewritten → the api_content sidecar (exact bytes
                 # previously sent) is stale; drop it so replay can't resend
                 # the pre-merge bytes without the summary.

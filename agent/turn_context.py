@@ -640,11 +640,6 @@ def build_turn_context(
                 agent.model,
                 f"{_compressor.context_length:,}",
             )
-            agent._emit_status(
-                f"📦 Preflight compression: ~{_preflight_tokens:,} tokens "
-                f">= {_compressor.threshold_tokens:,} threshold. "
-                "This may take a moment."
-            )
             for _pass in range(3):
                 _orig_len = len(messages)
                 _orig_tokens = _preflight_tokens

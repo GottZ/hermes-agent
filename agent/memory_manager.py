@@ -25,6 +25,7 @@ Usage in run_agent.py:
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -33,7 +34,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.memory_provider import MemoryProvider
+from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION
 from agent.skill_commands import extract_user_instruction_from_skill_message
 from tools.registry import tool_error
 
@@ -961,23 +962,127 @@ class MemoryManager:
                     provider.name, e,
                 )
 
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+    def bind_pre_compress_checkpoint_session(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        checkpoint_api_version: int = PRE_COMPRESS_CHECKPOINT_API_VERSION,
+        **kwargs,
+    ) -> None:
+        """Fail closed while binding checkpoint-capable providers to a session."""
+        failures: list[str] = []
+        for provider in tuple(self._providers):
+            try:
+                raw_version = getattr(
+                    provider, "pre_compress_checkpoint_api_version", 0
+                )
+            except Exception:
+                continue
+            provider_version = raw_version if type(raw_version) is int else 0
+            if provider_version < checkpoint_api_version:
+                continue
+            try:
+                provider.on_session_switch(
+                    new_session_id,
+                    parent_session_id=parent_session_id,
+                    reset=reset,
+                    **kwargs,
+                )
+            except Exception:
+                try:
+                    failures.append(str(provider.name))
+                except Exception:
+                    failures.append(type(provider).__name__)
+        if failures:
+            raise RuntimeError(
+                "Checkpoint provider session binding failed: " + ", ".join(failures)
+            )
+
+    def supports_pre_compress_checkpoint(
+        self,
+        api_version: int = PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    ) -> bool:
+        """Return whether an active provider guarantees checkpoint API support."""
+        for provider in tuple(self._providers):
+            try:
+                raw_version = getattr(
+                    provider, "pre_compress_checkpoint_api_version", 0
+                )
+            except Exception:
+                continue
+            provider_version = raw_version if type(raw_version) is int else 0
+            if provider_version >= api_version:
+                return True
+        return False
+
+    def on_pre_compress(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        require_checkpoint: bool = False,
+        checkpoint_api_version: int = PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    ) -> str:
         """Notify all providers before context compression.
 
         Returns combined text from providers to include in the compression
-        summary prompt. Empty string if no provider contributes.
+        summary prompt. Empty string if no provider contributes. When
+        ``require_checkpoint`` is true, at least one provider must advertise the
+        requested checkpoint API and every such provider must return
+        successfully. Each provider receives an isolated deep copy so one hook
+        cannot mutate the payload observed by another hook or by compression.
         """
         parts = []
-        for provider in self._providers:
+        providers = tuple(self._providers)
+        checkpoint_providers: list[MemoryProvider] = []
+        provider_versions: dict[int, int] = {}
+        for provider in providers:
             try:
-                result = provider.on_pre_compress(messages)
-                if result and result.strip():
+                raw_version = getattr(
+                    provider, "pre_compress_checkpoint_api_version", 0
+                )
+            except Exception:
+                raw_version = 0
+            provider_version = raw_version if type(raw_version) is int else 0
+            provider_versions[id(provider)] = provider_version
+            if provider_version >= checkpoint_api_version:
+                checkpoint_providers.append(provider)
+
+        if require_checkpoint and not checkpoint_providers:
+            raise RuntimeError(
+                "No active memory provider implements pre-compress checkpoint "
+                f"API v{checkpoint_api_version}"
+            )
+
+        checkpoint_failures: list[str] = []
+        for provider in providers:
+            provider_version = provider_versions[id(provider)]
+            is_checkpoint_provider = provider_version >= checkpoint_api_version
+            if require_checkpoint and not is_checkpoint_provider:
+                continue
+            try:
+                provider_name = str(provider.name)
+            except Exception:
+                provider_name = type(provider).__name__
+            try:
+                result = provider.on_pre_compress(copy.deepcopy(messages))
+                if isinstance(result, str) and result.strip():
                     parts.append(result)
+                elif require_checkpoint:
+                    checkpoint_failures.append(provider_name)
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_pre_compress failed: %s",
-                    provider.name, e,
+                    provider_name, type(e).__name__,
                 )
+                if require_checkpoint and is_checkpoint_provider:
+                    checkpoint_failures.append(provider_name)
+        if checkpoint_failures:
+            raise RuntimeError(
+                "Pre-compress checkpoint failed for compatible provider(s): "
+                + ", ".join(checkpoint_failures)
+            )
         return "\n\n".join(parts)
 
     @staticmethod
@@ -1211,7 +1316,13 @@ class MemoryManager:
             active_tasks,
         )
 
-    def initialize_all(self, session_id: str, **kwargs) -> None:
+    def initialize_all(
+        self,
+        session_id: str,
+        *,
+        require_success: bool = False,
+        **kwargs,
+    ) -> None:
         """Initialize all providers.
 
         Automatically injects ``hermes_home`` into *kwargs* so that every
@@ -1221,7 +1332,9 @@ class MemoryManager:
         if "hermes_home" not in kwargs:
             from hermes_constants import get_hermes_home
             kwargs["hermes_home"] = str(get_hermes_home())
-        for provider in self._providers:
+        failed_providers: list[MemoryProvider] = []
+        failed_names: list[str] = []
+        for provider in tuple(self._providers):
             try:
                 provider.initialize(session_id=session_id, **kwargs)
             except Exception as e:
@@ -1229,3 +1342,19 @@ class MemoryManager:
                     "Memory provider '%s' initialize failed: %s",
                     provider.name, e,
                 )
+                if require_success:
+                    failed_providers.append(provider)
+                    try:
+                        failed_names.append(str(provider.name))
+                    except Exception:
+                        failed_names.append(type(provider).__name__)
+        if failed_providers:
+            self._providers = [
+                provider
+                for provider in self._providers
+                if provider not in failed_providers
+            ]
+            raise RuntimeError(
+                "Required memory provider initialization failed: "
+                + ", ".join(failed_names)
+            )

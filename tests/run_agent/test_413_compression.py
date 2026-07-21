@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 
 from agent.context_compressor import SUMMARY_PREFIX
+from agent.conversation_compression import COMPACTION_STATUS
 from run_agent import AIAgent
 import run_agent
 
@@ -759,13 +760,17 @@ class TestPreflightCompression:
             patch.object(agent, "_cleanup_task_resources"),
         ):
             # Simulate compression reducing messages to a small set that fits
-            mock_compress.return_value = (
-                [
-                    {"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"},
-                    {"role": "user", "content": "hello"},
-                ],
-                "new system prompt",
-            )
+            def _compress_after_gate(*_args, **_kwargs):
+                agent._emit_status(COMPACTION_STATUS)
+                return (
+                    [
+                        {"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"},
+                        {"role": "user", "content": "hello"},
+                    ],
+                    "new system prompt",
+                )
+
+            mock_compress.side_effect = _compress_after_gate
             result = agent.run_conversation("hello", conversation_history=big_history)
 
         # Preflight compression is a multi-pass loop (up to 3 passes for very
@@ -780,7 +785,7 @@ class TestPreflightCompression:
         assert result["completed"] is True
         assert result["final_response"] == "After preflight"
         assert any(
-            ev == "lifecycle" and "Preflight compression" in msg
+            ev == "lifecycle" and msg == COMPACTION_STATUS
             for ev, msg in status_messages
         )
 

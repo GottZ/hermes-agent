@@ -111,8 +111,13 @@ def _make_agent_with_cooldown(db_path, session_id, *, cooldown_until=None):
     agent = _FakeAgent()
     agent.compression_enabled = True
     agent._emit_status = MagicMock()
+
+    def _compress_after_gate(messages, *_args, **_kwargs):
+        agent._emit_status("compression started after gate")
+        return messages, "SYSTEM"
+
     agent._compress_context = MagicMock(
-        side_effect=lambda messages, *_a, **_k: (messages, "SYSTEM")
+        side_effect=_compress_after_gate
     )
 
     db = SessionDB(db_path=db_path)
@@ -450,4 +455,20 @@ def test_expired_cooldown_allows_preflight(tmp_path):
     assert isinstance(ctx, TurnContext)
     agent._emit_status.assert_called_once()
     agent._compress_context.assert_called()
+
+
+def test_preflight_status_is_not_emitted_before_compression_gate(tmp_path):
+    agent = _make_agent_with_cooldown(tmp_path / "state.db", "sess-1")
+
+    def gated_compress(messages, system_prompt, **_kwargs):
+        agent._emit_status.assert_not_called()
+        agent._emit_status("compression started after gate")
+        return messages, system_prompt
+
+    agent._compress_context.side_effect = gated_compress
+    with patch("agent.turn_context._should_run_preflight_estimate", return_value=True), \
+         patch("agent.turn_context.estimate_request_tokens_rough", return_value=999_999):
+        _build(agent)
+
+    agent._emit_status.assert_called_once_with("compression started after gate")
 

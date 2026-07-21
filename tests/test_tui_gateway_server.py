@@ -5575,6 +5575,41 @@ def test_session_compress_uses_compress_helper(monkeypatch):
     emit.assert_any_call("status.update", "sid", {"kind": "status", "text": "ready"})
 
 
+def test_session_compress_status_is_not_emitted_before_compression_gate(monkeypatch):
+    agent = types.SimpleNamespace()
+    session = _session(agent=agent)
+    session["history"] = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+        {"role": "assistant", "content": "four"},
+    ]
+    server._sessions["sid"] = session
+    events = []
+
+    def gated_compress(session, focus_topic=None, **_kwargs):
+        assert not any(
+            event[0] == "status.update" and event[2].get("kind") == "compressing"
+            for event in events
+        )
+        server._status_update("sid", "compressing", "compression started after gate")
+        return 2, {"total": 42}
+
+    monkeypatch.setattr(server, "_compress_session_history", gated_compress)
+    monkeypatch.setattr(server, "_session_info", lambda _agent, *a: {"model": "x"})
+    with patch("tui_gateway.server._emit", side_effect=lambda *args: events.append(args)):
+        resp = server.handle_request(
+            {"id": "1", "method": "session.compress", "params": {"session_id": "sid"}}
+        )
+
+    assert resp["result"]["removed"] == 2
+    assert (
+        "status.update",
+        "sid",
+        {"kind": "compressing", "text": "compression started after gate"},
+    ) in events
+
+
 def test_session_compress_reports_aborted_summary_without_success(monkeypatch):
     compression_state = types.SimpleNamespace(
         _last_compress_aborted=True,
