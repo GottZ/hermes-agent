@@ -10544,6 +10544,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         include_ancestors: bool,
         repair_alternation: bool,
         include_row_ids: bool = False,
+        include_summary_markers: bool = False,
     ) -> List[Dict[str, Any]]:
         """Decode fetched message rows into the OpenAI conversation format.
 
@@ -10580,7 +10581,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 decoded = self._decode_display_metadata(row["display_metadata"])
                 if decoded is not None:
                     msg["display_metadata"] = decoded
-            if row["_compressed_summary"]:
+            if include_summary_markers and row["_compressed_summary"]:
                 msg["_compressed_summary"] = True
             if row["timestamp"]:
                 msg["timestamp"] = row["timestamp"]
@@ -10718,6 +10719,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             include_ancestors=False,
             repair_alternation=True,
             include_row_ids=True,
+            # ctx-checkpoint: the resumed model history must keep the summary
+            # marker so pre-compress checkpointing can exclude derivative
+            # summaries after a process restart (marker survives restart).
+            include_summary_markers=True,
         )
         display_history = self._rows_to_conversation(
             rows,
