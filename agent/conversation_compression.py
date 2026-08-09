@@ -2251,8 +2251,11 @@ def compress_context(
     # The memory-provider context handoff below is intentionally Hermes-only:
     # the app server does not expose its native summary prompt, so there is no
     # truthful injection point for ``on_pre_compress()`` return text here.
-    checkpoint_required = bool(
-        getattr(agent, "compression_checkpoint_required", False)
+    # `is True` (not bool()): unit tests drive this path with bare MagicMock
+    # agents whose auto-created attributes are truthy; the gate must only arm
+    # on the explicit boolean set by agent_init from config.
+    checkpoint_required = (
+        getattr(agent, "compression_checkpoint_required", False) is True
     )
     if getattr(agent, "api_mode", None) == "codex_app_server":
         if checkpoint_required:
