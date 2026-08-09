@@ -4297,7 +4297,11 @@ class GatewaySlashCommandsMixin:
                 model=model,
                 max_iterations=4,
                 quiet_mode=True,
-                skip_memory=True,
+                # This agent performs a lossy rewrite.  When
+                # compression.checkpoint_required is enabled it must load the
+                # configured memory provider so _compress_context() can create
+                # the required pre-compression checkpoint.
+                skip_memory=False,
                 enabled_toolsets=["memory"],
                 session_id=session_entry.session_id,
                 session_db=getattr(self._session_db, "_db", self._session_db),

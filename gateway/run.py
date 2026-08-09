@@ -19235,7 +19235,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                     model=_hyg_model,
                                     max_iterations=4,
                                     quiet_mode=True,
-                                    skip_memory=True,
+                                    # Hygiene performs the same lossy rewrite
+                                    # as normal compression.  Keep the memory
+                                    # provider active so a required checkpoint
+                                    # is created before any transcript mutation.
+                                    skip_memory=False,
                                     enabled_toolsets=["memory"],
                                     session_id=session_entry.session_id,
                                     session_db=_hyg_session_db,
