@@ -3548,6 +3548,13 @@ def _reconnect_backoff(attempt: int) -> int:
     return min(30 * (2 ** (attempt - 1)), _RECONNECT_BACKOFF_CAP)
 
 
+def _advance_progress_lines(lines: list, message: Any, grouping: str) -> list:
+    """Advance visible tool progress while preserving one bubble in rotate mode."""
+    if grouping == "rotate":
+        return [message]
+    return [*lines, message]
+
+
 class TurnRunner:
     """Per-turn collaborator carrying the tool-progress callbacks that used to
     be nested closures inside ``GatewayRunner._run_agent_inner``.
@@ -4040,7 +4047,9 @@ class TurnRunner:
                     continue
                 else:
                     msg = raw
-                    progress_lines.append(msg)
+                    progress_lines = _advance_progress_lines(
+                        progress_lines, msg, ctx.progress_grouping
+                    )
 
                 if await _roll_progress_overflow_if_needed():
                     _last_edit_ts = time.monotonic()
@@ -4162,7 +4171,9 @@ class TurnRunner:
                             ctx.last_progress_msg[0] = None
                             ctx.repeat_count[0] = 0
                         else:
-                            progress_lines.append(raw)
+                            progress_lines = _advance_progress_lines(
+                                progress_lines, raw, ctx.progress_grouping
+                            )
                             await _roll_progress_overflow_if_needed()
                     except Exception:
                         break
