@@ -2272,15 +2272,18 @@ if _config_path.exists():
             # Built-in tasks that previously had explicit env-var bridging.
             # Kept here as the canonical bridged set; plugin tasks are added
             # below via the plugin auxiliary registry.
+            # Import-lock safety: never consult the plugin registry while
+            # this module is mid-import. get_plugin_auxiliary_tasks()
+            # triggers/joins plugin discovery, and a plugin whose register()
+            # imports gateway.run (discord-server-policy) then deadlocks
+            # against the import lock held by this thread — the manager's
+            # _discovered flag is no safe guard either, because
+            # discover_and_load() sets it up front as a re-entrancy guard
+            # while the sweep is still running on the background-discovery
+            # thread. Only the built-in keys are bridged here; plugin keys
+            # are bridged in start_gateway() via
+            # _bridge_plugin_auxiliary_env() once discovery has completed.
             _aux_bridged_keys = {"vision", "web_extract", "approval"}
-            try:
-                from hermes_cli.plugins import get_plugin_auxiliary_tasks
-                for _entry in get_plugin_auxiliary_tasks():
-                    _aux_bridged_keys.add(_entry["key"])
-            except Exception:
-                # Plugin discovery failure must not break gateway startup;
-                # built-in bridging stays intact.
-                pass
 
             for _task_key in _aux_bridged_keys:
                 _task_cfg = _auxiliary_cfg.get(_task_key, {})
@@ -29885,6 +29888,44 @@ def _gateway_stderr_formatter() -> logging.Formatter:
     return RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
+def _bridge_plugin_auxiliary_env() -> None:
+    """Bridge plugin-registered auxiliary task config to env vars.
+
+    Runs from start_gateway() once plugin discovery can complete safely.
+    The module-import path above deliberately skips discovery — a plugin
+    register() that imports gateway.run would deadlock against the import
+    lock while background discovery is in flight. Same env semantics as the
+    import-time bridging of the built-in keys (vision/web_extract/approval).
+    """
+    try:
+        from hermes_cli.config import load_config as _load_config
+        from hermes_cli.plugins import get_plugin_auxiliary_tasks
+
+        aux_cfg = (_load_config() or {}).get("auxiliary", {})
+        if not aux_cfg or not isinstance(aux_cfg, dict):
+            return
+        for entry in get_plugin_auxiliary_tasks():
+            task_key = str(entry.get("key", "")).strip()
+            task_cfg = aux_cfg.get(task_key, {})
+            if not task_key or not isinstance(task_cfg, dict):
+                continue
+            prov = str(task_cfg.get("provider", "")).strip()
+            model = str(task_cfg.get("model", "")).strip()
+            base_url = str(task_cfg.get("base_url", "")).strip()
+            api_key = str(task_cfg.get("api_key", "")).strip()
+            upper = task_key.upper()
+            if prov and prov != "auto":
+                os.environ[f"AUXILIARY_{upper}_PROVIDER"] = prov
+            if model:
+                os.environ[f"AUXILIARY_{upper}_MODEL"] = model
+            if base_url:
+                os.environ[f"AUXILIARY_{upper}_BASE_URL"] = base_url
+            if api_key:
+                os.environ[f"AUXILIARY_{upper}_API_KEY"] = api_key
+    except Exception:
+        logger.warning("plugin auxiliary env bridging failed", exc_info=True)
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -29907,6 +29948,11 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     from hermes_cli.resource_limits import apply_nofile_soft_limit
 
     apply_nofile_soft_limit()
+
+    # Bridge plugin-registered auxiliary tasks now that discovery can run
+    # without deadlocking on this module's import lock (see the module-level
+    # auxiliary block above and _bridge_plugin_auxiliary_env()).
+    _bridge_plugin_auxiliary_env()
 
     # Snapshot the checkout revision now, while sys.modules still matches disk,
     # so a later `git pull` under this long-lived process can be detected (and
