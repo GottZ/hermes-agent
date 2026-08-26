@@ -6,8 +6,13 @@ The contract has three parts:
 - ``MemoryManager`` exposes capability probing and a ``require_checkpoint``
   mode whose failure must propagate instead of being swallowed;
 - the compression host normalizes messages to direct user/assistant evidence
-  before handing them to v2+ providers.
+  before handing them to v2+ providers;
+- providers advertising v3 additionally receive ``tool_evidence=`` (one entry
+  per tool-result row) and transcript-stable ordinals; v1/v2 providers see
+  byte-identical calls and payloads.
 """
+
+import copy
 
 import pytest
 
@@ -15,11 +20,13 @@ from agent.conversation_compression import (
     CompressionCheckpointUnavailable,
     _checkpoint_blocked,
     _direct_messages_for_pre_compress_memory,
+    _tool_evidence_for_pre_compress_memory,
 )
 from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
 from agent.memory_manager import MemoryManager
 from agent.memory_provider import (
     PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION,
     MemoryProvider,
 )
 
@@ -49,6 +56,14 @@ class _BaseStubProvider(MemoryProvider):
 
 class _CheckpointProvider(_BaseStubProvider):
     pre_compress_checkpoint_api_version = PRE_COMPRESS_CHECKPOINT_API_VERSION
+
+
+class _ToolEvidenceProvider(_CheckpointProvider):
+    pre_compress_checkpoint_api_version = PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION
+
+    def on_pre_compress(self, messages, *, tool_evidence=None, **kwargs):
+        self.pre_compress_calls.append((messages, tool_evidence))
+        return f"{self._name} context"
 
 
 class _FailingCheckpointProvider(_CheckpointProvider):
@@ -199,6 +214,234 @@ def test_manager_best_effort_mode_keeps_historical_swallow_semantics():
     combined = manager.on_pre_compress([{"role": "user", "content": "evidence"}])
 
     assert combined == ""
+
+
+# --- Checkpoint API v3: tool evidence ---------------------------------------
+
+
+def _v3_transcript():
+    """Live transcript shape: tool rows as written by tool_dispatch_helpers,
+    ``tool_calls`` entries as built by chat_completion_helpers."""
+    call = {"id": "call_1", "type": "function",
+            "function": {"name": "terminal", "arguments": '{"command": "nmap"}'}}
+    return [
+        {"role": "user", "content": "scan the network"},
+        {"role": "assistant", "content": "Scanning now.", "tool_calls": [call]},
+        {"role": "tool", "name": "terminal", "tool_name": "terminal", "content": "26 hosts up",
+         "tool_call_id": "call_1", "timestamp": "2026-08-26T00:00:00Z"},
+        {"role": "assistant", "content": "prior summary", COMPRESSED_SUMMARY_METADATA_KEY: True},
+        {"role": "user", "content": "thanks"},
+    ]
+
+
+def test_tool_evidence_has_one_entry_per_tool_row_joined_to_its_call():
+    messages = _v3_transcript()
+
+    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+
+    assert tool_evidence == [{
+        "ordinal": 3, "tool_call_id": "call_1", "tool_name": "terminal",
+        "content": "26 hosts up", "timestamp": "2026-08-26T00:00:00Z",
+        "call_name": "terminal", "call_arguments": '{"command": "nmap"}',
+    }]
+
+
+def test_tool_evidence_joins_composite_bridge_ids_on_the_call_id_half():
+    """Responses-bridge transcripts store ``call_id|response_item_id`` on the
+    assistant side while the tool row carries the normalized call-id half."""
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_7|fc_abc", "type": "function",
+             "function": {"name": "terminal", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_7", "tool_name": "terminal",
+         "content": "ok"},
+    ]
+
+    [entry] = _tool_evidence_for_pre_compress_memory(messages)
+
+    assert entry["tool_call_id"] == "call_7"
+    assert (entry["call_name"], entry["call_arguments"]) == ("terminal", "{}")
+
+
+def test_v3_provider_receives_tool_evidence_keyword():
+    manager = MemoryManager()
+    v3 = _ToolEvidenceProvider("durable")
+    manager.add_provider(v3)
+    messages = _v3_transcript()
+    evidence_v3 = _direct_messages_for_pre_compress_memory(messages, with_ordinals=True)
+    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+
+    manager.on_pre_compress(
+        messages,
+        evidence_messages=_direct_messages_for_pre_compress_memory(messages),
+        evidence_messages_v3=evidence_v3,
+        tool_evidence=tool_evidence,
+    )
+
+    assert v3.pre_compress_calls == [(evidence_v3, tool_evidence)]
+    assert [m["_ordinal"] for m in v3.pre_compress_calls[0][0]] == [1, 2, 5]
+
+
+def test_v2_provider_payload_is_byte_identical_to_todays_evidence():
+    manager = MemoryManager()
+    v2 = _CheckpointProvider("durable")
+    manager.add_provider(v2)
+    messages = _v3_transcript()
+    evidence = _direct_messages_for_pre_compress_memory(messages)
+
+    manager.on_pre_compress(messages, evidence_messages=evidence)
+
+    assert v2.pre_compress_calls == [evidence]
+    assert all("_ordinal" not in m for m in v2.pre_compress_calls[0])
+    assert all("tool_calls" not in m for m in v2.pre_compress_calls[0])
+
+
+def test_mixed_manager_keeps_v2_call_unchanged_and_enriches_v3():
+    # One external provider per manager; "builtin" is always accepted.
+    manager = MemoryManager()
+    v2 = _CheckpointProvider("builtin")
+    v3 = _ToolEvidenceProvider("durable")
+    manager.add_provider(v2)
+    manager.add_provider(v3)
+    messages = _v3_transcript()
+    evidence = _direct_messages_for_pre_compress_memory(messages)
+    evidence_v3 = _direct_messages_for_pre_compress_memory(messages, with_ordinals=True)
+    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+
+    combined = manager.on_pre_compress(
+        messages,
+        evidence_messages=evidence,
+        evidence_messages_v3=evidence_v3,
+        tool_evidence=tool_evidence,
+        require_checkpoint=True,
+    )
+
+    # The v2 stub's positional-only signature rejects any keyword.
+    assert v2.pre_compress_calls == [evidence]
+    assert all("_ordinal" not in m for m in v2.pre_compress_calls[0])
+    assert v3.pre_compress_calls == [(evidence_v3, tool_evidence)]
+    assert "builtin context" in combined and "durable context" in combined
+
+
+def test_v3_ordinals_come_from_one_unfiltered_count():
+    messages = _v3_transcript()
+
+    direct = _direct_messages_for_pre_compress_memory(messages, with_ordinals=True)
+    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+
+    # user=1, assistant(prose+tool_calls)=2, tool=3, summary=4 (skipped), user=5.
+    assert [(m["_ordinal"], m["role"]) for m in direct] == [
+        (1, "user"),
+        (2, "assistant"),
+        (5, "user"),
+    ]
+    assert [e["ordinal"] for e in tool_evidence] == [3]
+    assert all("tool_calls" not in m for m in direct)
+
+
+def test_gate_still_arms_with_a_v2_only_provider():
+    manager = MemoryManager()
+    manager.add_provider(_CheckpointProvider("durable"))
+
+    assert manager.supports_pre_compress_checkpoint(PRE_COMPRESS_CHECKPOINT_API_VERSION)
+    assert not manager.supports_pre_compress_checkpoint(
+        PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION
+    )
+    combined = manager.on_pre_compress(
+        [{"role": "user", "content": "evidence"}],
+        require_checkpoint=True,
+        checkpoint_api_version=PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    )
+    assert "durable context" in combined
+
+
+def test_tool_evidence_skips_malformed_rows_without_raising():
+    messages = [
+        {"role": "assistant", "content": "x", "tool_calls": "not-a-list"},
+        {"role": "assistant", "content": "y", "tool_calls": ["not-a-dict", {"id": "c2"}]},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c3", "function": "bad"}]},
+        {"role": "tool", "content": "orphan"},
+        "not-a-dict",
+        {"role": "tool", "content": "prior", "tool_call_id": "c9", COMPRESSED_SUMMARY_METADATA_KEY: True},
+        {"role": "tool", "tool_name": "terminal", "content": "no id"},
+        {"role": "tool", "content": "unmatched", "tool_call_id": "c3"},
+    ]
+
+    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+
+    assert [(e["ordinal"], e["tool_call_id"], e["tool_name"]) for e in tool_evidence] == [
+        (7, None, "terminal"),
+        (8, "c3", None),
+    ]
+    assert tool_evidence[1]["call_name"] is None
+    assert tool_evidence[1]["call_arguments"] is None
+
+
+def _compress_context_harness(monkeypatch, provider):
+    """MagicMock agent as in test_compress_signal_leak.py, with a real
+    ``MemoryManager`` holding ``provider``; records the manager call kwargs."""
+    from unittest.mock import MagicMock
+
+    from agent.conversation_compression import compress_context
+
+    agent = MagicMock()
+    agent._cached_system_prompt = ""
+    agent.tools = None
+    agent._build_system_prompt = MagicMock(return_value="sys prompt")
+    agent._emit_warning = MagicMock()
+    agent._session_db.try_acquire_compression_lock.return_value = True
+    agent.context_compressor.compress.return_value = [{"role": "user", "content": "[summary]"}]
+    agent.context_compressor.compression_count = 0
+    agent.context_compressor.last_compression_rough_tokens = 0
+    agent._memory_manager = MemoryManager()
+    agent._memory_manager.add_provider(provider)
+    monkeypatch.setattr(
+        "agent.conversation_compression._compression_lock_holder",
+        lambda a: "pid=test:holder",
+    )
+
+    seen = {}
+    original = MemoryManager.on_pre_compress
+
+    def _recording(self, messages, **kwargs):
+        seen.update(kwargs)
+        return original(self, messages, **kwargs)
+
+    monkeypatch.setattr(MemoryManager, "on_pre_compress", _recording)
+    compress_context(agent, _v3_transcript(), "", approx_tokens=100, force=True)
+    return seen
+
+
+def test_compress_context_hands_v3_payloads_only_to_a_v3_manager(monkeypatch):
+    v3 = _ToolEvidenceProvider("durable")
+    seen = _compress_context_harness(monkeypatch, v3)
+
+    assert [m["_ordinal"] for m in seen["evidence_messages_v3"]] == [1, 2, 5]
+    assert [e["ordinal"] for e in seen["tool_evidence"]] == [3]
+    assert v3.pre_compress_calls == [
+        (seen["evidence_messages_v3"], seen["tool_evidence"])
+    ]
+
+    v2 = _CheckpointProvider("durable")
+    seen = _compress_context_harness(monkeypatch, v2)
+
+    assert seen["evidence_messages_v3"] is None
+    assert seen["tool_evidence"] is None
+    assert v2.pre_compress_calls == [seen["evidence_messages"]]
+
+
+def test_v3_payloads_never_mutate_the_transcript():
+    messages = _v3_transcript()
+    user_row, tool_row = messages[0], messages[2]
+    snapshot = copy.deepcopy(messages)
+
+    direct = _direct_messages_for_pre_compress_memory(messages, with_ordinals=True)
+    _tool_evidence_for_pre_compress_memory(messages)
+
+    assert messages == snapshot
+    assert messages[0] is user_row and messages[2] is tool_row
+    assert direct[0] is not user_row and "_ordinal" not in user_row
 
 
 def test_checkpoint_blocked_error_is_prefixed_and_typed():

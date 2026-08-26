@@ -543,7 +543,8 @@ compression:
   enabled: true
 
   # Fail closed before lossy compaction unless an active memory provider that
-  # implements the pre-compress checkpoint contract (API v2) confirms its
+  # implements the pre-compress checkpoint contract (API v2; v3 adds tool
+  # evidence for providers that opt in) confirms its
   # durable checkpoint (default: false). With this on and no checkpoint, the
   # compaction attempt errors with BLOCKED_MISSING_PREREQUISITE and the
   # uncompressed transcript is preserved for a later retry. The gate binds to

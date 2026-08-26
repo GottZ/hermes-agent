@@ -71,7 +71,10 @@ from agent.context_engine import (
     automatic_compaction_status_message,
     sanitize_memory_context,
 )
-from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_API_VERSION
+from agent.memory_provider import (
+    PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION,
+)
 from agent.model_metadata import (
     estimate_messages_tokens_rough,
     estimate_request_tokens_rough,
@@ -1551,7 +1554,9 @@ class _CompressionActivityHeartbeat:
                 return
             self._touch("context compression in progress")
 
-def _direct_messages_for_pre_compress_memory(messages: Any) -> list[dict[str, Any]]:
+def _direct_messages_for_pre_compress_memory(
+    messages: Any, *, with_ordinals: bool = False
+) -> list[dict[str, Any]]:
     """Return direct user/assistant evidence safe for memory checkpointing.
 
     Compression summaries are derivative context, not new source evidence.
@@ -1560,6 +1565,10 @@ def _direct_messages_for_pre_compress_memory(messages: Any) -> list[dict[str, An
     transcript internals independently. Assistant messages that carry both
     prose and ``tool_calls`` keep their prose (the ``tool_calls`` payload is
     stripped); pure tool-call wrappers without prose are dropped.
+
+    With ``with_ordinals`` (checkpoint API v3) every returned row is a copy
+    carrying ``_ordinal``, its 1-based position in the unfiltered transcript;
+    the default output stays byte-identical to the v2 contract.
     """
     # Deferred import: context_compressor imports turn_context, which imports
     # this module — a module-level import here would close that cycle
@@ -1567,7 +1576,7 @@ def _direct_messages_for_pre_compress_memory(messages: Any) -> list[dict[str, An
     from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
 
     direct_messages: list[dict[str, Any]] = []
-    for message in messages or []:
+    for ordinal, message in enumerate(messages or [], start=1):
         if not isinstance(message, dict):
             continue
         role = message.get("role")
@@ -1583,8 +1592,68 @@ def _direct_messages_for_pre_compress_memory(messages: Any) -> list[dict[str, An
             if not has_prose:
                 continue
             message = {k: v for k, v in message.items() if k != "tool_calls"}
+        elif with_ordinals:
+            message = dict(message)
+        if with_ordinals:
+            message["_ordinal"] = ordinal
         direct_messages.append(message)
     return direct_messages
+
+
+def _tool_evidence_for_pre_compress_memory(messages: Any) -> list[dict[str, Any]]:
+    """Return one entry per tool-result row for checkpoint API v3 providers.
+
+    Each entry joins the tool row to the assistant ``tool_calls`` entry that
+    issued it (``call_name``/``call_arguments``, ``None`` when unmatched) and
+    carries ``ordinal`` from the same unfiltered transcript count as
+    ``_ordinal`` on the direct evidence. Content is passed through verbatim.
+    Malformed rows are skipped, never raised on: this channel enriches the
+    checkpoint and must not become a second gate.
+    """
+    from agent.context_compressor import COMPRESSED_SUMMARY_METADATA_KEY
+
+    calls: dict[str, tuple[Any, Any]] = {}
+    tool_evidence: list[dict[str, Any]] = []
+    for ordinal, message in enumerate(messages or [], start=1):
+        if not isinstance(message, dict) or message.get(COMPRESSED_SUMMARY_METADATA_KEY):
+            continue
+        role = message.get("role")
+        if role == "assistant":
+            tool_calls = message.get("tool_calls")
+            for call in tool_calls if isinstance(tool_calls, list) else []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    function = {}
+                call_id = call.get("id") or call.get("call_id")
+                if isinstance(call_id, str):
+                    # Bridge ids are stored as ``call_id|response_item_id``;
+                    # tool rows carry the call-id half (tool_dispatch_helpers).
+                    call_id = call_id.split("|", 1)[0].strip()
+                    calls[call_id] = (function.get("name"), function.get("arguments"))
+            continue
+        if role != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        tool_name = message.get("tool_name") or message.get("name")
+        if not tool_call_id and not tool_name:
+            continue
+        call_name, call_arguments = (
+            calls.get(tool_call_id, (None, None))
+            if isinstance(tool_call_id, str)
+            else (None, None)
+        )
+        tool_evidence.append({
+            "ordinal": ordinal,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "content": message.get("content"),
+            "timestamp": message.get("timestamp"),
+            "call_name": call_name,
+            "call_arguments": call_arguments,
+        })
+    return tool_evidence
 
 
 class _CompressionLockLeaseRefresher:
@@ -3018,6 +3087,23 @@ def compress_context(
         # normalized evidence list is handed only to API v2+ checkpoint
         # providers inside MemoryManager.on_pre_compress().
         evidence_messages = _direct_messages_for_pre_compress_memory(messages)
+        # API v3 payloads are enrichment, never a gate: a failing probe or
+        # builder leaves them None and the v2 path below runs unchanged.
+        evidence_messages_v3 = None
+        tool_evidence = None
+        supports_tool_evidence = getattr(
+            memory_manager, "supports_pre_compress_checkpoint", None
+        )
+        if memory_manager is not None and callable(supports_tool_evidence):
+            try:
+                if supports_tool_evidence(PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION):
+                    evidence_messages_v3 = _direct_messages_for_pre_compress_memory(
+                        messages, with_ordinals=True
+                    )
+                    tool_evidence = _tool_evidence_for_pre_compress_memory(messages)
+            except Exception:
+                evidence_messages_v3 = None
+                tool_evidence = None
         if checkpoint_required:
             supports_checkpoint = getattr(
                 memory_manager, "supports_pre_compress_checkpoint", None
@@ -3044,6 +3130,8 @@ def compress_context(
                     evidence_messages=evidence_messages,
                     require_checkpoint=True,
                     checkpoint_api_version=PRE_COMPRESS_CHECKPOINT_API_VERSION,
+                    evidence_messages_v3=evidence_messages_v3,
+                    tool_evidence=tool_evidence,
                 )
             except Exception as exc:
                 logger.warning(
@@ -3058,7 +3146,10 @@ def compress_context(
         elif memory_manager:
             try:
                 _maybe_ctx = memory_manager.on_pre_compress(
-                    messages, evidence_messages=evidence_messages
+                    messages,
+                    evidence_messages=evidence_messages,
+                    evidence_messages_v3=evidence_messages_v3,
+                    tool_evidence=tool_evidence,
                 )
                 if isinstance(_maybe_ctx, str):
                     memory_context = sanitize_memory_context(_maybe_ctx)

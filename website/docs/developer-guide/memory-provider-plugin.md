@@ -217,6 +217,33 @@ evidence. Key your archive writes by content (for example a transcript
 digest) and upsert, so retries and overlaps deduplicate instead of
 accumulating duplicate archives.
 
+### Checkpoint API v3: tool evidence
+
+Direct evidence omits tool results, so a v2 checkpoint cannot archive what
+the tools actually returned. A provider that declares
+`pre_compress_checkpoint_api_version = 3` (`PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION`)
+additionally receives them through a keyword:
+
+```python
+def on_pre_compress(self, messages, *, tool_evidence=None, **kwargs):
+    ...
+```
+
+`messages` is the same direct-evidence list as under v2, except that every
+row carries `_ordinal` — its 1-based position in the unfiltered transcript.
+`tool_evidence` holds one entry per tool-result row, in transcript order:
+
+| Field | Meaning |
+|---|---|
+| `ordinal` | 1-based transcript position (same count as `_ordinal`) |
+| `tool_call_id`, `tool_name` | as on the tool row (`None` when absent) |
+| `content`, `timestamp` | verbatim — no truncation, no redaction |
+| `call_name`, `call_arguments` | from the assistant `tool_calls` entry that issued the call (`None` when unmatched) |
+
+The channel is additive: the checkpoint gate still requires v2, v2 providers
+are unaffected (same positional call, same payload, no `_ordinal`), and a
+failure while building the v3 payload leaves the v2 path untouched.
+
 Contract tests: `tests/agent/test_pre_compress_checkpoint_contract.py`.
 
 ## Config Schema

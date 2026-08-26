@@ -33,7 +33,11 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION
+from agent.memory_provider import (
+    MemoryProvider,
+    PRE_COMPRESS_CHECKPOINT_API_VERSION,
+    PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION,
+)
 from agent.skill_commands import extract_user_instruction_from_skill_message
 from tools.registry import tool_error
 
@@ -1087,6 +1091,8 @@ class MemoryManager:
         evidence_messages: Optional[List[Dict[str, Any]]] = None,
         require_checkpoint: bool = False,
         checkpoint_api_version: int = PRE_COMPRESS_CHECKPOINT_API_VERSION,
+        evidence_messages_v3: Optional[List[Dict[str, Any]]] = None,
+        tool_evidence: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Notify all providers before context compression.
 
@@ -1098,6 +1104,10 @@ class MemoryManager:
         ``evidence_messages`` is the host-normalized direct-evidence list
         handed only to providers that opted into checkpoint API v2+; when
         omitted, v2 providers receive the raw list too.
+        Providers on API v3+ receive ``tool_evidence=`` as a keyword (and
+        ``evidence_messages_v3`` in place of ``evidence_messages``) only when
+        ``tool_evidence`` is given; every other provider is called exactly
+        as before.
 
         When ``require_checkpoint`` is true, at least one provider
         advertising the requested checkpoint API must return successfully;
@@ -1122,7 +1132,18 @@ class MemoryManager:
             if is_checkpoint_provider and evidence_messages is not None:
                 provider_messages = evidence_messages
             try:
-                result = provider.on_pre_compress(provider_messages)
+                if (
+                    provider_version >= PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION
+                    and tool_evidence is not None
+                ):
+                    result = provider.on_pre_compress(
+                        evidence_messages_v3
+                        if evidence_messages_v3 is not None
+                        else provider_messages,
+                        tool_evidence=tool_evidence,
+                    )
+                else:
+                    result = provider.on_pre_compress(provider_messages)
                 if result and result.strip():
                     parts.append(result)
             except Exception as e:

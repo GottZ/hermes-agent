@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 # strict-mode failure propagation).
 PRE_COMPRESS_CHECKPOINT_API_VERSION = 2
 
+# Version 3 is additive: a provider declaring >= 3 additionally receives
+# ``tool_evidence=`` (one entry per tool-result row) and transcript-stable
+# ``_ordinal`` fields on its evidence rows. The checkpoint gate still
+# requires version 2; v1/v2 providers see unchanged calls and payloads.
+PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION = 3
+
 # Default glyph for the deterministic memory indicators. Providers override
 # per-status with their own brand mark (e.g. Hindsight uses "👁️").
 INDICATOR_GLYPH = "🧠"
@@ -113,7 +119,9 @@ class MemoryProvider(ABC):
     # Providers that durably checkpoint every successful on_pre_compress()
     # call may opt into that host contract by setting the current version
     # (PRE_COMPRESS_CHECKPOINT_API_VERSION). Version 1 is the implicit
-    # historical contract: best-effort semantics, raw message list.
+    # historical contract: best-effort semantics, raw message list. Version 3
+    # (PRE_COMPRESS_TOOL_EVIDENCE_API_VERSION) additionally opts into the
+    # ``tool_evidence=`` keyword on on_pre_compress().
     pre_compress_checkpoint_api_version = 1
 
     @property
