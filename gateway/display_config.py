@@ -14,7 +14,7 @@ from typing import Any
 # Settings configurable per-platform; other display settings are CLI-only.
 _GLOBAL_DEFAULTS: dict[str, Any] = {
     "tool_progress": "all",
-    "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "separate" = one msg per tool
+    "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "rotate" = one bubble, newest line only; "separate" = one msg per tool
     "show_reasoning": False,
     "reasoning_style": "code",  # "code" (💭 **Reasoning:** + fence), "blockquote" ("> "), "subtext" ("-# " Discord)
     "tool_preview_length": 0,
@@ -158,7 +158,7 @@ _NORMALISERS: dict[str, Any] = {
     "thinking_progress": _norm_bool,
     "cleanup_progress": _norm_cleanup_progress,
     "live_status": _norm_tristate("full", "off", {"full", "verb", "off"}, extra_truthy={"all"}),
-    "tool_progress_grouping": _norm_choice(("accumulate", "separate")),
+    "tool_progress_grouping": _norm_choice(("accumulate", "rotate", "separate")),
     "reasoning_style": _norm_choice(("code", "blockquote", "subtext")),
     "tool_preview_length": _norm_int,
 }

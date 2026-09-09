@@ -522,7 +522,11 @@ class TurnRunner:
                 return base_msg
             st.progress_lines[-1] = f"{base_msg} (×{count + 1})"
             return st.progress_lines[-1]
-        st.progress_lines.append(raw)
+        if self._ctx.progress_grouping == "rotate":
+            # rotate: the bubble shows only the newest tool line (product mode).
+            st.progress_lines = [raw]
+        else:
+            st.progress_lines.append(raw)
         return raw
 
     async def _flush_progress_edit(self, st) -> None:
