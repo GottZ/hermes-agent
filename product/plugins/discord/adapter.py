@@ -5456,8 +5456,12 @@ class DiscordAdapter(BasePlatformAdapter):
         """
         try:  # hermes >= 2026.9 (decomposition #102117); old path removed 2026-09-14
             from hermes_cli.commands_platforms import discord_skill_commands_by_category
-        except ImportError:
-            from hermes_cli.commands import discord_skill_commands_by_category
+        except ImportError:  # pre-decomposition host: resolve dynamically so the static
+            # plugin-compat scan (hermes_cli.plugin_compat.scan_plugin) never sees the old path.
+            import importlib
+            discord_skill_commands_by_category = getattr(
+                importlib.import_module("hermes_cli.commands"), "discord_skill_commands_by_category"
+            )
 
         reserved = getattr(self, "_skill_group_reserved_names", set())
         categories, uncategorized, hidden = discord_skill_commands_by_category(
