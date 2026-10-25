@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugin } from '@/contrib/plugins-store'
 import { queryClient } from '@/lib/query-client'
-import { $agentPlugins, $agentPluginsStatus } from '@/store/agent-plugins'
+import {
+  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsProfile, $agentPluginsStatus
+} from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $notifications } from '@/store/notifications'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
@@ -20,6 +22,15 @@ import { PluginsTab } from './plugins-tab'
 
 const requestGateway = vi.fn(async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => ({
   plugins: $agentPlugins.get()
+}))
+const { routedRequest } = vi.hoisted(() => ({
+  routedRequest: vi.fn(async (_connection: null | string, _profile: string, _method: string,
+    _params?: Record<string, unknown>): Promise<unknown> => ({ plugins: [] }))
+}))
+
+vi.mock('@/store/gateway', async original => ({
+  ...(await original<Record<string, unknown>>()),
+  requestGatewayForAgent: (...args: Parameters<typeof routedRequest>) => routedRequest(...args)
 }))
 
 // The shell owns search; exercise the same controlled composition as CapabilitiesView.
@@ -99,12 +110,17 @@ beforeEach(() => {
   $gatewayState.set('open')
   $pluginRecords.set({})
   $agentPlugins.set([])
+  $agentPluginsByOwner.set({})
+  $agentPluginsConnectionId.set(undefined)
+  $agentPluginsProfile.set(undefined)
   $agentPluginsStatus.set('ready')
   $catalogCardView.set(false)
   seedCatalog([])
   closePluginInstallRequest()
   requestGateway.mockReset()
   requestGateway.mockImplementation(async () => ({ plugins: $agentPlugins.get() }))
+  routedRequest.mockReset()
+  routedRequest.mockResolvedValue({ plugins: [] })
   setEnvVar.mockClear()
   setToolsetEnabled.mockReset()
   setToolsetEnabled.mockResolvedValue({ enabled: true, name: 'kanban', ok: true })
@@ -346,12 +362,55 @@ describe('PluginsTab', () => {
     const owner = { connectionId: 'local', profile: 'workbot' }
     renderPlugins({ profile: owner })
     await selectCatalogEntry(weatherEntry.name)
+    await waitFor(() => expect((screen.getByRole('button', { name: `Install ${weatherEntry.name}` }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: `Install ${weatherEntry.name}` }))
     expect($pluginInstallRequest.get()?.profile).toEqual(owner)
 
     closePluginInstallRequest()
     fireEvent.click(screen.getByRole('button', { name: 'Install from Git' }))
     expect($pluginInstallRequest.get()?.profile).toEqual(owner)
+  })
+
+  it('does not use another backend inventory to suppress a selected owner install', async () => {
+    seedCatalog()
+    $agentPlugins.set([{ name: weatherEntry.name, catalog_name: weatherEntry.name,
+      description: '', source: 'git', status: 'enabled', version: '1' }])
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    const install = screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
+    await waitFor(() => expect(install.disabled).toBe(false))
+    expect(routedRequest).toHaveBeenCalledWith('local', 'workbot', 'plugins.manage',
+      expect.objectContaining({ action: 'list', profile: 'workbot' }), undefined)
+    expect(requestGateway.mock.calls.some(([, params]) => params?.action === 'list')).toBe(false)
+    fireEvent.click(install)
+    expect($pluginInstallRequest.get()?.profile).toEqual({ connectionId: 'local', profile: 'workbot' })
+  })
+
+  it('does not freeze Install when another surface later loads a foreign owner', async () => {
+    seedCatalog()
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    const install = screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
+    await waitFor(() => expect(install.disabled).toBe(false))
+    $agentPlugins.set([{ name: weatherEntry.name, catalog_name: weatherEntry.name,
+      description: '', source: 'git', status: 'enabled', version: '1' }])
+    $agentPluginsProfile.set('workbot')
+    $agentPluginsConnectionId.set('cloud')
+    await waitFor(() => expect(install.disabled).toBe(false))
+  })
+
+  it('disables Install when the selected backend itself reports the catalog entry installed', async () => {
+    seedCatalog()
+    routedRequest.mockResolvedValue({ plugins: [{ name: weatherEntry.name, catalog_name: weatherEntry.name,
+      description: '', source: 'git', status: 'enabled', version: '1' }] })
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    await waitFor(() => expect($agentPluginsConnectionId.get()).toBe('local'))
+    expect(screen.queryByRole('button', { name: `Install ${weatherEntry.name}` })).toBeNull()
+    expect(screen.getByRole('switch', { name: `Agent: ${weatherEntry.name}` })).toBeTruthy()
+    $agentPlugins.set([])
+    $agentPluginsConnectionId.set('cloud')
+    await waitFor(() => expect(screen.getByRole('switch', { name: `Agent: ${weatherEntry.name}` })).toBeTruthy())
   })
 
   it.each([false, true])('opens the scoped native install dialog from the selected entry (cards=%s)', async cards => {

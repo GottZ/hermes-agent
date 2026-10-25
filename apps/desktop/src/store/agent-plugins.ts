@@ -109,6 +109,12 @@ export const $agentPluginsError = atom<string | null>(null)
  *  settings must check it: the list is shared, and a scope switch keeps the
  *  previous profile's rows on screen until the new list lands. */
 export const $agentPluginsProfile = atom<null | string | undefined>(undefined)
+/** Exact connection owning the shared rows; same profile name on another backend is not enough. */
+export const $agentPluginsConnectionId = atom<null | string | undefined>(undefined)
+/** Owner-specific snapshots survive another surface refreshing a different backend's shared list. */
+export const $agentPluginsByOwner = atom<Record<string, AgentPluginRow[]>>({})
+export const pluginInventoryKey = (connectionId: string, profile: string | null) =>
+  JSON.stringify([connectionId, profile])
 /** Best available address of the row whose toggle RPC is in flight. */
 export const $agentPluginBusy = atom<string | null>(null)
 
@@ -135,9 +141,11 @@ export const isDesktopRelevantPlugin = (row: AgentPluginRow): boolean => {
 
 let inflight: Promise<void> | null = null
 let inflightProfile: string | null = null
+let inflightConnectionId: string | null = null
 // Bumped per load so a slow response from a previous profile scope can't
 // overwrite the newer scope's list (async results can land out of order).
 let loadGeneration = 0
+const ownerGenerations = new Map<string, number>()
 
 /** Scope a `plugins.manage` payload to a profile. Omitted (null) = the
  *  backend's launch profile — older backends ignore the extra param. */
@@ -149,16 +157,25 @@ const withProfile = (params: Record<string, unknown>, profile?: string | null) =
  *  backend); concurrent callers for the SAME profile share one in-flight
  *  request — a different profile starts fresh so a scope switch can't get a
  *  stale list. */
-export function loadAgentPlugins(request: GatewayRequest, profile?: string | null): Promise<void> {
+export function loadAgentPlugins(
+  request: GatewayRequest,
+  profile?: string | null,
+  connectionId: string | null = null
+): Promise<void> {
   const scope = profile ?? null
 
-  if (inflight && inflightProfile === scope) {
+  if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
     return inflight
   }
 
   const generation = ++loadGeneration
+  const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
+  if (ownerKey) {
+    ownerGenerations.set(ownerKey, generation)
+  }
 
   inflightProfile = scope
+  inflightConnectionId = connectionId
   inflight = (async () => {
     if ($agentPluginsStatus.get() !== 'ready') {
       $agentPluginsStatus.set('loading')
@@ -170,12 +187,17 @@ export function loadAgentPlugins(request: GatewayRequest, profile?: string | nul
         withProfile({ action: 'list' }, scope)
       )
 
+      const rows = (result?.plugins ?? []).map(normalizeAgentPluginRow)
+      if (ownerKey && ownerGenerations.get(ownerKey) === generation) {
+        $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: rows })
+      }
       if (generation !== loadGeneration) {
         return
       }
 
-      $agentPlugins.set((result?.plugins ?? []).map(normalizeAgentPluginRow))
+      $agentPlugins.set(rows)
       $agentPluginsProfile.set(scope)
+      $agentPluginsConnectionId.set(connectionId)
       $agentPluginsStatus.set('ready')
       $agentPluginsError.set(null)
     } catch (e) {
@@ -189,6 +211,7 @@ export function loadAgentPlugins(request: GatewayRequest, profile?: string | nul
       if (generation === loadGeneration) {
         inflight = null
         inflightProfile = null
+        inflightConnectionId = null
       }
     }
   })()
@@ -208,7 +231,8 @@ export async function toggleAgentPlugin(
   key: string,
   enable: boolean,
   failMessage: string,
-  profile?: string | null
+  profile?: string | null,
+  connectionId: string | null = null
 ): Promise<boolean> {
   $agentPluginBusy.set(key)
 
@@ -232,12 +256,21 @@ export async function toggleAgentPlugin(
     const refreshed = result.plugin
 
     // Patch only a list loaded for the profile this toggle targeted.
-    if (refreshed && $agentPluginsProfile.get() === (profile ?? null)) {
+    if (refreshed && $agentPluginsProfile.get() === (profile ?? null)
+        && $agentPluginsConnectionId.get() === connectionId) {
       const snapshot = normalizeAgentPluginRow(refreshed)
 
       $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
+      if (connectionId) {
+        const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
+        const owned = $agentPluginsByOwner.get()[ownerKey]
+        if (owned) {
+          $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(),
+            [ownerKey]: owned.map(row => row.key === key ? { ...row, ...snapshot } : row) })
+        }
+      }
     } else {
-      await loadAgentPlugins(request, profile)
+      await loadAgentPlugins(request, profile, connectionId)
     }
 
     return true
@@ -462,7 +495,8 @@ export async function removeAgentPlugin(
   request: GatewayRequest,
   name: string,
   failMessage: string,
-  profile?: string | null
+  profile?: string | null,
+  connectionId: string | null = null
 ): Promise<boolean> {
   $agentPluginBusy.set(name)
 
@@ -473,7 +507,17 @@ export async function removeAgentPlugin(
       throw new Error(failMessage)
     }
 
-    $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
+    if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
+      $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
+    }
+    if (connectionId) {
+      const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
+      const owned = $agentPluginsByOwner.get()[ownerKey]
+      if (owned) {
+        $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(),
+          [ownerKey]: owned.filter(row => row.name !== name) })
+      }
+    }
 
     return true
   } catch (e) {

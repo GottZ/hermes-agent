@@ -8,10 +8,10 @@ import {
   installAgentPlugin,
   loadAgentPlugins
 } from '@/store/agent-plugins'
-import { requestGatewayForAgent } from '@/store/gateway'
 import { notify } from '@/store/notifications'
 import type { AppGuidance } from '@/store/plugin-app-guidance'
 import type { PluginInstallRequest } from '@/store/plugin-install-request'
+import { pluginOwnerRequest } from '@/store/plugin-owner-request'
 
 export type ProbeResult = Awaited<ReturnType<NonNullable<NonNullable<Window['hermesDesktop']>['probePluginRepo']>>>
 
@@ -60,22 +60,7 @@ export interface InstallDeps {
 /** Keep an explicit registry owner across preflight, install and inventory RPCs.
  * Legacy links with no pin continue using the ambient backend request. */
 export function installRequestGateway(request: PluginInstallRequest, ambient: GatewayRequest): GatewayRequest {
-  const scope = request.profile
-
-  if (!scope || typeof scope !== 'object' || !scope.connectionId?.trim()) {
-    return ambient
-  }
-
-  const connectionId = scope.connectionId.trim()
-
-  return <T>(method: string, params?: Record<string, unknown>, timeoutMs?: number) =>
-    requestGatewayForAgent<T>(
-      connectionId,
-      String(params?.profile ?? scope.profile ?? 'default'),
-      method,
-      params,
-      timeoutMs
-    )
+  return pluginOwnerRequest(request.profile, ambient)
 }
 
 export type InstallOutcome =
@@ -217,7 +202,8 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
   }
 
   if (agentResult?.timedOut) {
-    void loadAgentPlugins(deps.requestGateway, plan.profile)
+    void loadAgentPlugins(deps.requestGateway, plan.profile,
+      typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null)
 
     return { status: 'uncertain' }
   }
@@ -226,7 +212,8 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
     await installDesktopHalf(plan, components, deps.copy, report, agentResult)
   }
 
-  await loadAgentPlugins(deps.requestGateway, plan.profile)
+  await loadAgentPlugins(deps.requestGateway, plan.profile,
+    typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null)
 
   for (const message of report.successes) {
     notify({ kind: 'success', message })

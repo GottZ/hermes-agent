@@ -7,14 +7,16 @@ import { Puzzle } from 'lucide-react'
 import { useEffect } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
-import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useConnectionOwner } from '@/components/assistant-ui/use-connection-owner'
 import { Button } from '@/components/ui/button'
 import { Chip } from '@/components/ui/chip'
 import { useI18n } from '@/i18n'
 import { lookupPluginCatalogEntry } from '@/lib/plugin-catalog'
 import { cn } from '@/lib/utils'
-import { $agentPlugins, $agentPluginsProfile, loadAgentPlugins } from '@/store/agent-plugins'
+import {
+  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsProfile,
+  loadAgentPlugins, pluginInventoryKey
+} from '@/store/agent-plugins'
 import type { ConnectionOwner } from '@/store/connection-request'
 import { requestGatewayForAgent } from '@/store/gateway'
 import { openCatalogPluginInstall } from '@/store/plugin-catalog-install'
@@ -35,12 +37,12 @@ async function readPresence(owner: ConnectionOwner, names: string[]): Promise<Ca
   return result.presence ?? []
 }
 
-async function openInstall(name: string, title: string, profile: string): Promise<void> {
+async function openInstall(name: string, title: string, owner: ConnectionOwner): Promise<void> {
   const lookup = await lookupPluginCatalogEntry(name)
 
   if (lookup.ok) {
     // The card stays in the chat and flips the row to Installed when the plugin list reloads.
-    openCatalogPluginInstall(lookup.entry, profile, { stayAfterInstall: true, title })
+    openCatalogPluginInstall(lookup.entry, owner, { stayAfterInstall: true, title })
   }
 }
 
@@ -64,16 +66,21 @@ export function PluginsCard({
   const copy = t.firstRun
   const storedId = useStore(useSessionView().$storedId)
   const owner = useConnectionOwner(storedId, true)
-  const plugins = useStore($agentPlugins)
-  const pluginsProfile = useStore($agentPluginsProfile)
-  const { requestGateway } = useGatewayRequest()
-
+  const inventories = useStore($agentPluginsByOwner)
+  const shared = useStore($agentPlugins)
+  const loadedProfile = useStore($agentPluginsProfile)
+  const loadedConnection = useStore($agentPluginsConnectionId)
   // The shared plugin list may be empty or another profile's: load the chat's own.
   useEffect(() => {
     if (owner) {
-      void loadAgentPlugins(requestGateway, owner.profile)
+      void loadAgentPlugins(
+        (method, params, timeoutMs) =>
+          requestGatewayForAgent(owner.connectionId, owner.profile, method, params, timeoutMs),
+        owner.profile,
+        owner.connectionId
+      )
     }
-  }, [owner, requestGateway])
+  }, [owner])
 
   const presence = useQuery({
     enabled: Boolean(owner) && names.length > 0,
@@ -82,7 +89,8 @@ export function PluginsCard({
     staleTime: Infinity
   })
 
-  const ownRows = owner && pluginsProfile === owner.profile ? plugins : []
+  const ownRows = owner?.connectionId ? inventories[pluginInventoryKey(owner.connectionId, owner.profile)] ?? []
+    : owner && loadedConnection === null && loadedProfile === owner.profile ? shared : []
   const installed = new Set(ownRows.flatMap(row => (row.catalog_name ? [row.catalog_name, row.name] : [row.name])))
 
   const rows = presence.data ?? []
@@ -109,7 +117,7 @@ export function PluginsCard({
                 on={on}
                 onToggle={() => {
                   if (!on && owner) {
-                    void openInstall(row.name, row.title || row.name, owner.profile)
+                    void openInstall(row.name, row.title || row.name, owner)
                   }
                 }}
                 sub={on ? copy.installed : row.sentence || copy.install}

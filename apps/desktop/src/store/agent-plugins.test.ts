@@ -3,11 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   $agentPlugins,
+  $agentPluginsByOwner,
+  $agentPluginsConnectionId,
   $agentPluginsProfile,
   type AgentPluginRow,
   installAgentPlugin,
   isDesktopRelevantPlugin,
+  loadAgentPlugins,
   normalizeAgentPluginRow,
+  pluginInventoryKey,
   saveAgentPluginSettings
 } from './agent-plugins'
 
@@ -17,6 +21,30 @@ const row = (partial: Partial<AgentPluginRow>): AgentPluginRow =>
 afterEach(() => {
   vi.useRealTimers()
   $agentPluginsProfile.set(undefined)
+  $agentPluginsConnectionId.set(undefined)
+  $agentPluginsByOwner.set({})
+})
+
+describe('loadAgentPlugins connection ownership', () => {
+  it('does not coalesce same-named profiles across backends or publish a late foreign result', async () => {
+    let finishCloud!: (value: { plugins: AgentPluginRow[] }) => void
+    const cloud = vi.fn(() => new Promise<{ plugins: AgentPluginRow[] }>(resolve => { finishCloud = resolve }))
+    const local = vi.fn(async () => ({ plugins: [row({ key: 'local-plugin' })] }))
+    const slow = loadAgentPlugins(cloud as never, 'workbot', 'cloud')
+    const fast = loadAgentPlugins(local as never, 'workbot', 'local')
+    await fast
+    finishCloud({ plugins: [row({ key: 'cloud-plugin' })] })
+    await slow
+    expect(cloud).toHaveBeenCalledTimes(1)
+    expect(local).toHaveBeenCalledTimes(1)
+    expect($agentPlugins.get().map(item => item.key)).toEqual(['local-plugin'])
+    expect($agentPluginsProfile.get()).toBe('workbot')
+    expect($agentPluginsConnectionId.get()).toBe('local')
+    expect($agentPluginsByOwner.get()[pluginInventoryKey('cloud', 'workbot')].map(item => item.key))
+      .toEqual(['cloud-plugin'])
+    expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')].map(item => item.key))
+      .toEqual(['local-plugin'])
+  })
 })
 
 describe('installAgentPlugin', () => {
