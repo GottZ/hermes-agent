@@ -37,11 +37,10 @@ import {
   toggleAgentPlugin
 } from '@/store/agent-plugins'
 import { confirm } from '@/store/confirm'
-import { registryConnectionKind } from '@/store/connection-registry-state'
 import { notify, notifyError } from '@/store/notifications'
 import { openCatalogPluginInstall } from '@/store/plugin-catalog-install'
 import { openPluginInstallRequest } from '@/store/plugin-install-request'
-import { pluginOwnerRequest } from '@/store/plugin-owner-request'
+import { isRemotePluginOwner, pluginOwnerRequest, scopeConnectionId } from '@/store/plugin-owner-request'
 import { $connection, $gatewayState } from '@/store/session'
 
 import { Pill } from '../../settings/primitives'
@@ -68,15 +67,6 @@ function profileParam(scope: ProfileScope): null | string {
   }
 
   return typeof scope === 'string' ? scope : (scope.profile ?? null)
-}
-
-/** The desktop-half reconciler is local to Electron, not to the foreground chat. */
-function isRemotePluginOwner(profile: ProfileScope, foregroundRemote: boolean): boolean {
-  const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() : null
-
-  return connectionId
-    ? connectionId !== 'local' && registryConnectionKind(connectionId) !== 'local'
-    : foregroundRemote
 }
 
 function reveal(file: string) {
@@ -561,7 +551,7 @@ export function PluginActions({ profile }: { profile: ProfileScope }) {
   const d = t.settings.plugins
   const { requestGateway: ambientRequest } = useGatewayRequest()
   const scope = profileParam(profile)
-  const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() || null : null
+  const connectionId = scopeConnectionId(profile)
 
   const requestGateway = useMemo(
     // Built from the derived owner, not the scope object, whose identity may change every render.
@@ -629,7 +619,7 @@ export const PluginsTab = memo(function PluginsTab({
 
   const scope = profileParam(profile)
   const label = scopeLabel ?? scope ?? t.skills.plugins.defaultProfile
-  const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() || null : null
+  const connectionId = scopeConnectionId(profile)
   const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
 
   const requestGateway = useMemo(

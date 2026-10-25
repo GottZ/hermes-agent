@@ -13,11 +13,12 @@ import {
 } from './agent-plugins'
 import { notify } from './notifications'
 import { openPluginInstallRequest, type PluginInstallRequest } from './plugin-install-request'
+import { scopeConnectionId } from './plugin-owner-request'
 
 /** The install owner's own inventory, or undefined when no list loaded for exactly that owner. */
 function ownerInventory(profile: ProfileScope): AgentPluginRow[] | undefined {
   const scoped = profile && typeof profile === 'object' ? profile : null
-  const connectionId = scoped?.connectionId?.trim() || null
+  const connectionId = scopeConnectionId(profile)
   const label = scoped ? (scoped.profile ?? null) : typeof profile === 'string' ? profile : null
 
   if (connectionId) {

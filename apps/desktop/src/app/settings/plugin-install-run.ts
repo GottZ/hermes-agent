@@ -11,7 +11,7 @@ import {
 import { notify } from '@/store/notifications'
 import type { AppGuidance } from '@/store/plugin-app-guidance'
 import type { PluginInstallRequest } from '@/store/plugin-install-request'
-import { pluginOwnerRequest } from '@/store/plugin-owner-request'
+import { scopeConnectionId } from '@/store/plugin-owner-request'
 
 export type ProbeResult = Awaited<ReturnType<NonNullable<NonNullable<Window['hermesDesktop']>['probePluginRepo']>>>
 
@@ -55,12 +55,6 @@ export interface InstallDeps {
   copy: InstallModalCopy
   navigate: (to: string) => void
   requestGateway: GatewayRequest
-}
-
-/** Keep an explicit registry owner across preflight, install and inventory RPCs.
- * Legacy links with no pin continue using the ambient backend request. */
-export function installRequestGateway(request: PluginInstallRequest, ambient: GatewayRequest): GatewayRequest {
-  return pluginOwnerRequest(request.profile, ambient)
 }
 
 export type InstallOutcome =
@@ -202,12 +196,7 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
   }
 
   if (agentResult?.timedOut) {
-    void loadAgentPlugins(
-      deps.requestGateway,
-      plan.profile,
-      typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
-      { force: true }
-    )
+    void loadAgentPlugins(deps.requestGateway, plan.profile, scopeConnectionId(plan.request.profile), { force: true })
 
     return { status: 'uncertain' }
   }
@@ -216,12 +205,7 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
     await installDesktopHalf(plan, components, deps.copy, report, agentResult)
   }
 
-  await loadAgentPlugins(
-    deps.requestGateway,
-    plan.profile,
-    typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
-    { force: true }
-  )
+  await loadAgentPlugins(deps.requestGateway, plan.profile, scopeConnectionId(plan.request.profile), { force: true })
 
   for (const message of report.successes) {
     notify({ kind: 'success', message })

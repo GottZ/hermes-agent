@@ -23,7 +23,6 @@ import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle, Loader2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { COMMIT_SHA_RE, type GatewayRequest } from '@/store/agent-plugins'
-import { registryConnectionKind } from '@/store/connection-registry-state'
 import { activeGatewayConnectionId } from '@/store/gateway'
 import {
   type AppGuidance,
@@ -38,6 +37,7 @@ import {
   type PluginInstallRequest,
   queuePluginHelpDraft
 } from '@/store/plugin-install-request'
+import { isRemotePluginOwner, pluginOwnerRequest, scopeConnectionId } from '@/store/plugin-owner-request'
 import {
   $activeGatewayProfile,
   $profiles,
@@ -51,13 +51,7 @@ import {
 import { $connection } from '@/store/session'
 
 import { PluginInstallDetails } from './plugin-install-details'
-import {
-  type InstallModalCopy,
-  type InstallOutcome,
-  installRequestGateway,
-  type ProbeResult,
-  runPluginInstall
-} from './plugin-install-run'
+import { type InstallModalCopy, type InstallOutcome, type ProbeResult, runPluginInstall } from './plugin-install-run'
 import { usePluginProbe } from './use-plugin-probe'
 
 const CAPTION = 'text-[length:var(--conversation-caption-font-size)]'
@@ -382,10 +376,7 @@ interface InstallViewProps {
 }
 
 function routePluginHelpChat(request: PluginInstallRequest, targetProfile: string, activeProfile: string) {
-  const connectionId =
-    request.profile && typeof request.profile === 'object'
-      ? request.profile.connectionId?.trim() || activeGatewayConnectionId()
-      : activeGatewayConnectionId()
+  const connectionId = scopeConnectionId(request.profile) || activeGatewayConnectionId()
 
   if (connectionId) {
     newSessionInAgent({ connectionId, profile: targetProfile })
@@ -502,16 +493,11 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   const { t } = useI18n()
   const m = t.settings.plugins.installModal
   const { requestGateway: ambientRequest } = useGatewayRequest()
-  const requestGateway = useMemo(() => installRequestGateway(request, ambientRequest), [request, ambientRequest])
+  const requestGateway = useMemo(() => pluginOwnerRequest(request.profile, ambientRequest), [request, ambientRequest])
   const navigate = useNavigate()
   const ambientRemote = useStore($connection)?.mode === 'remote'
 
-  const pinnedConnection =
-    request.profile && typeof request.profile === 'object' ? request.profile.connectionId?.trim() : null
-
-  const remote = pinnedConnection
-    ? pinnedConnection !== 'local' && registryConnectionKind(pinnedConnection) !== 'local'
-    : ambientRemote
+  const remote = isRemotePluginOwner(request.profile, ambientRemote)
 
   const activeProfile = useStore($activeGatewayProfile)
   const profiles = useStore($profiles)

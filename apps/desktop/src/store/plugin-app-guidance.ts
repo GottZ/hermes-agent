@@ -60,12 +60,10 @@ export async function presenceForCatalogPlugin(
   profile: string
 ): Promise<AppGuidance | null> {
   try {
-    // `names` is the current batch contract; `name` allows single-name implementations.
     const result = await request<{ presence?: unknown }>(
       'plugins.manage',
       {
         action: 'presence',
-        name,
         names: [name],
         profile
       },

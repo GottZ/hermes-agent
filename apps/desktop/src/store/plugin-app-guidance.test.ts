@@ -23,7 +23,6 @@ describe('catalog app preflight', () => {
       'plugins.manage',
       {
         action: 'presence',
-        name: 'game-editor',
         names: ['game-editor'],
         profile: 'research'
       },
