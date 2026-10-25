@@ -614,3 +614,21 @@ def test_disabled_off_pin_tree_without_ref_does_not_gain_reviewed_link(monkeypat
     result = install._place_tree(entry, "source", force=False, ref=None,
                                  assume_deps_consent=True, step=lambda *_: None)
     assert result["app_guidance"]["download_url"] is None
+
+
+def test_connector_card_row_judges_presence_without_reloading_the_catalog(monkeypatch):
+    """tools/connectors/catalog.py resolves the entry from the live catalog already."""
+    from hermes_cli import plugin_catalog as catalog
+    from tools.connectors.catalog import _plugin_row
+
+    # Annotated and runnable on every OS, so presence() reaches the reviewed-annotation check.
+    reviewed = catalog.entry_from_mapping({
+        "name": "paint", "repo": "https://github.com/fx/paint", "sha": "0" * 40, "title": "Paint Studio",
+        "app_server": "paint", "app_download_url": "https://paint.example/download",
+        "description": "Paints.", "maintainer": "fx", "tier": "community"}, "paint")
+    loads = []
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: loads.append(1) or [reviewed])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: NEEDS_APP)
+    row = _plugin_row(reviewed, None)
+    assert row["app_state"] == "missing_app"
+    assert loads == []
