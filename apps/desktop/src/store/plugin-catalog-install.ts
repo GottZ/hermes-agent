@@ -2,8 +2,36 @@ import type { ProfileScope } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { lookupPluginCatalogEntry, type PluginCatalogEntry, type PluginCatalogLookupError } from '@/lib/plugin-catalog'
 
+import {
+  $agentPlugins,
+  $agentPluginsByOwner,
+  $agentPluginsConnectionId,
+  $agentPluginsProfile,
+  $agentPluginsStatus,
+  type AgentPluginRow,
+  pluginInventoryKey
+} from './agent-plugins'
 import { notify } from './notifications'
 import { openPluginInstallRequest, type PluginInstallRequest } from './plugin-install-request'
+
+/** The install owner's own inventory, or undefined when no list loaded for exactly that owner. */
+function ownerInventory(profile: ProfileScope): AgentPluginRow[] | undefined {
+  const scoped = profile && typeof profile === 'object' ? profile : null
+  const connectionId = scoped?.connectionId?.trim() || null
+  const label = scoped ? (scoped.profile ?? null) : typeof profile === 'string' ? profile : null
+
+  if (connectionId) {
+    return $agentPluginsByOwner.get()[pluginInventoryKey(connectionId, label)]
+  }
+
+  // The shared list proves a legacy label only when it was loaded for that label on the ambient backend.
+  const ambient =
+    $agentPluginsStatus.get() === 'ready' &&
+    $agentPluginsConnectionId.get() === null &&
+    $agentPluginsProfile.get() === label
+
+  return ambient ? $agentPlugins.get() : undefined
+}
 
 /**
  * THE way a curated-catalog pick reaches the Install Plugin dialog. The
@@ -17,8 +45,16 @@ export function openCatalogPluginInstall(
   profile: ProfileScope,
   options: Pick<PluginInstallRequest, 'legacyHint' | 'stayAfterInstall' | 'tier' | 'title'> = {}
 ): void {
-  // The shared inventory has only a profile label, not a connection owner.
-  // Never treat another backend's matching row as proof this owner has the plugin.
+  // Only the selected owner's own inventory proves the plugin is there; another backend's
+  // matching row in the shared list is not evidence for this owner.
+  const existing = ownerInventory(profile)?.find(row => row.catalog_name === entry.name || row.name === entry.name)
+
+  if (existing && !existing.update_available) {
+    notify({ kind: 'success', message: translateNow('skills.plugins.alreadyInstalled', entry.name) })
+
+    return
+  }
+
   openPluginInstallRequest({
     catalogName: entry.name,
     profile,

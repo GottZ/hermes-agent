@@ -3,7 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { lookupPluginCatalogEntry, PLUGIN_CATALOG_URL, type PluginCatalogLookup } from '@/lib/plugin-catalog'
 
-import { $agentPlugins } from './agent-plugins'
+import {
+  $agentPlugins,
+  $agentPluginsByOwner,
+  $agentPluginsConnectionId,
+  $agentPluginsProfile,
+  $agentPluginsStatus,
+  type AgentPluginRow,
+  pluginInventoryKey
+} from './agent-plugins'
 import { $notifications } from './notifications'
 import { openCatalogPluginInstall, requestPluginCatalogInstallFromDeepLink } from './plugin-catalog-install'
 import { $pluginInstallRequest } from './plugin-install-request'
@@ -132,5 +140,55 @@ describe('openCatalogPluginInstall', () => {
     })
 
     expect($pluginInstallRequest.get()).toMatchObject({ catalogName: 'weather', stayAfterInstall: true })
+  })
+
+  const weather: AgentPluginRow = {
+    catalog_name: 'weather',
+    description: '',
+    name: 'weather',
+    source: 'git',
+    status: 'enabled',
+    update_available: false,
+    version: '1'
+  }
+
+  it('says already installed when the selected owner snapshot has the plugin', () => {
+    $agentPluginsByOwner.set({ [pluginInventoryKey('remote-1', 'workbot')]: [weather] })
+
+    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
+      connectionId: 'remote-1',
+      profile: 'workbot'
+    })
+
+    expect($pluginInstallRequest.get()).toBeNull()
+    expect($notifications.get()[0]).toMatchObject({ kind: 'success' })
+    $agentPluginsByOwner.set({})
+  })
+
+  it('says already installed for a legacy label only when the ambient list was loaded for it', () => {
+    $agentPlugins.set([weather])
+    $agentPluginsStatus.set('ready')
+    $agentPluginsConnectionId.set(null)
+    $agentPluginsProfile.set('workbot')
+
+    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, 'research')
+    expect($pluginInstallRequest.get()).toMatchObject({ catalogName: 'weather', profile: 'research' })
+
+    $pluginInstallRequest.set(null)
+    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, 'workbot')
+    expect($pluginInstallRequest.get()).toBeNull()
+    expect($notifications.get()[0]).toMatchObject({ kind: 'success' })
+  })
+
+  it('still opens the dialog when the installed copy has an update', () => {
+    $agentPluginsByOwner.set({ [pluginInventoryKey('remote-1', 'workbot')]: [{ ...weather, update_available: true }] })
+
+    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
+      connectionId: 'remote-1',
+      profile: 'workbot'
+    })
+
+    expect($pluginInstallRequest.get()).toMatchObject({ catalogName: 'weather' })
+    $agentPluginsByOwner.set({})
   })
 })
