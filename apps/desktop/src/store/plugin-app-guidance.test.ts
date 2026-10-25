@@ -75,6 +75,18 @@ describe('catalog app preflight', () => {
     expect(officialAppDownloadUrl({ ...missing, download_url: 'https://127.0.0.1/download' })).toBeNull()
   })
 
+  it.each([
+    'https://127.1/',
+    'https://0x7f.0.0.1/',
+    'https://0177.0.0.1/',
+    'https://10.1/x',
+    'https://printer.local/',
+    'https://nas.home.arpa/',
+    'https://api.internal/'
+  ])('rejects a numeric or special-use vendor host: %s', url => {
+    expect(officialAppDownloadUrl({ ...missing, download_url: url })).toBeNull()
+  })
+
   it('holds an unreadable required app version without an install retry loop', () => {
     expect(isAppBlocked({ ...missing, reason: 'uncertain', required_version: '11.0', found_version: null })).toBe(true)
     expect(isAppBlocked({ ...missing, reason: 'uncertain', required_version: null })).toBe(false)

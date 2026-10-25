@@ -54,6 +54,32 @@ def test_vendor_download_metadata_round_trips_and_invalid_url_is_discarded():
         assert invalid.app_download_url == ""
 
 
+@pytest.mark.parametrize("url,safe", [
+    ("https://www.nvidia.com/en-us/software/nvidia-app/", True),
+    ("https://godotengine.org/download/macos/", True),
+    ("https://xn--nvda-qoa.com/", True),
+    ("https://127.0.0.1/", False),
+    # WHATWG parsers (Electron, every browser) read these as 127.0.0.1 / 10.0.0.1.
+    ("https://127.1/", False), ("https://0x7f.0.0.1/", False), ("https://0177.0.0.1/", False),
+    ("https://10.1/x", False), ("https://vendor.123/", False),
+    ("https://printer.local/", False), ("https://nas.home.arpa/", False), ("https://api.internal/", False),
+    ("https://app.localhost/", False),
+])
+def test_vendor_url_filter_matches_the_standalone_catalog_validator(url, safe):
+    """scripts/validate_plugin_catalog.py cannot import hermes_cli, so the two copies must agree."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "validate_plugin_catalog.py"
+    spec = importlib.util.spec_from_file_location("validate_plugin_catalog_parity", path)
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    errors: list[str] = []
+    validator._check_app_download_url({"app_download_url": url, "title": "T", "app_server": "srv"}, errors)
+    assert pc.is_safe_app_download_url(url) is safe
+    assert (not errors) is safe
+
+
 def test_category_defaults_to_other_and_unknown_category_is_rejected(tmp_path):
     """``category`` is the browse shelf: absent → ``desktop``; a value outside CATALOG_CATEGORIES is an
     invalid entry (skipped with a warning) so a typo cannot create a phantom shelf on the site."""

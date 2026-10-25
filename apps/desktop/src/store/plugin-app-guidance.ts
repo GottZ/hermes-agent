@@ -115,7 +115,9 @@ export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
       url.port ||
       url.hash ||
       !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(url.hostname) ||
-      /^\d+(?:\.\d+){3}$/.test(url.hostname)
+      // WHATWG already rewrote numeric hosts ("127.1") to a dotted quad; special-use names are never a vendor.
+      /^\d+(?:\.\d+){3}$/.test(url.hostname) ||
+      /(?:^|\.)(?:localhost|local|internal|home\.arpa)$/i.test(url.hostname)
     ) {
       return null
     }

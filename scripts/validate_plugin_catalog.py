@@ -142,25 +142,27 @@ def _check_requires_hermes(spec: object, errors: list[str]) -> None:
             )
 
 
+# Mirrors hermes_cli.plugin_catalog.is_safe_app_download_url (this script cannot import it): a last
+# label that is a number makes a WHATWG parser read the host as IPv4 ("127.1" is loopback), and
+# special-use names never reach a public vendor.
+_NUMERIC_HOST_LABEL = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)", re.IGNORECASE)
+_LOCAL_HOST_SUFFIXES = ("localhost", "local", "internal", "home.arpa")
+
+
 def _check_app_download_url(data: dict, errors: list[str]) -> None:
     if "app_download_url" not in data:
         return
-    import ipaddress
-
     url = data["app_download_url"]
     valid = False
     if isinstance(url, str) and not any(c.isspace() or ord(c) < 32 for c in url):
         try:
             parts = urlsplit(url)
-            host = parts.hostname or ""
-            valid = (parts.scheme == "https" and bool(re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host))
+            host = (parts.hostname or "").lower()
+            valid = (parts.scheme == "https" and bool(re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host))
                      and parts.username is None and parts.password is None and parts.port is None
-                     and not parts.fragment)
-            try:
-                ipaddress.ip_address(host)
-                valid = False
-            except ValueError:
-                pass
+                     and not parts.fragment
+                     and not _NUMERIC_HOST_LABEL.fullmatch(host.rsplit(".", 1)[-1])
+                     and not any(host == suffix or host.endswith("." + suffix) for suffix in _LOCAL_HOST_SUFFIXES))
         except ValueError:
             valid = False
     if (not valid or not isinstance(data.get("title"), str) or not data["title"].strip()

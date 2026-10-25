@@ -15,7 +15,6 @@ cached copy regardless of age, then falls back to the in-tree copy when no valid
 from __future__ import annotations
 
 import dataclasses
-import ipaddress
 import json
 import logging
 import re
@@ -57,24 +56,29 @@ def is_allowed_image_url(url: str) -> bool:
     return parts.scheme == "https" and bool(host) and (host in IMAGE_HOSTS or host.endswith(IMAGE_HOST_SUFFIX))
 
 
+# A WHATWG URL parser (Electron, every browser) reads a host whose last label is a number (decimal,
+# octal or 0x hex) as IPv4: "127.1" and "0x7f.0.0.1" open loopback. Mirrored in
+# scripts/validate_plugin_catalog.py, which must stay importable without hermes_cli.
+_NUMERIC_HOST_LABEL = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)", re.IGNORECASE)
+# Special-use names that never reach a public vendor (RFC 6761, RFC 6762, RFC 8375, ICANN .internal).
+_LOCAL_HOST_SUFFIXES = ("localhost", "local", "internal", "home.arpa")
+
+
 def is_safe_app_download_url(url: str) -> bool:
-    """Accept only a direct HTTPS vendor hostname, never credentials or a local network address."""
+    """Accept only a direct HTTPS vendor hostname, never credentials, an IP literal or a special-use name."""
     if not isinstance(url, str) or any(c.isspace() or ord(c) < 32 for c in url):
         return False
     try:
         parts = urlsplit(url)
-        host = parts.hostname or ""
-        if parts.scheme != "https" or not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host):
+        host = (parts.hostname or "").lower()
+        if parts.scheme != "https" or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host):
             return False
         if parts.username is not None or parts.password is not None or parts.port is not None or parts.fragment:
             return False
     except ValueError:
         return False
-    try:
-        ipaddress.ip_address(host)
-        return False
-    except ValueError:
-        return True
+    return not (_NUMERIC_HOST_LABEL.fullmatch(host.rsplit(".", 1)[-1])
+                or any(host == suffix or host.endswith("." + suffix) for suffix in _LOCAL_HOST_SUFFIXES))
 _NAME_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 
