@@ -793,9 +793,10 @@ export const en: Translations = {
           backendHost: 'This checks the connected backend, not this Desktop app.',
           download: (name: string) => `Download ${name} from the official vendor`,
           recheck: 'Check again',
+          checking: "Checking the plugin's requirements on the backend…",
           askHermes: 'Ask Hermes for help',
           helpDraft: (name: string, profile: string) =>
-            `Help me install or update ${name} on the backend computer for the ${profile} profile. First check its OS and requirements. Explain the steps and ask before changing anything or downloading software.`
+            `Help me install or update ${name} on the backend computer for the ${profile} profile. First check its OS and requirements. Explain the steps and ask before changing anything or downloading software. Until the installer is running, tell me what you are waiting for at every step: run downloads in the background and report their progress, and tell me when an approval in Hermes or an administrator prompt on that computer needs me.`
         },
         installFromGit: 'Install from Git',
         reviewRepository: 'Review repository',

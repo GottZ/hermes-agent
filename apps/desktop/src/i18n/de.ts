@@ -794,9 +794,10 @@ export const deOverrides = {
           backendHost: 'Geprüft wird das verbundene Backend, nicht diese Desktop-App.',
           download: name => `${name} von der offiziellen Herstellerseite herunterladen`,
           recheck: 'Erneut prüfen',
+          checking: 'Voraussetzungen des Plugins werden auf dem Backend geprüft…',
           askHermes: 'Hermes um Hilfe bitten',
           helpDraft: (name, profile) =>
-            `Hilf mir, ${name} auf dem Backend-Rechner für das Profil ${profile} zu installieren oder zu aktualisieren. Prüfe zuerst Betriebssystem und Voraussetzungen. Erkläre die Schritte und frage vor Änderungen oder Downloads nach.`
+            `Hilf mir, ${name} auf dem Backend-Rechner für das Profil ${profile} zu installieren oder zu aktualisieren. Prüfe zuerst Betriebssystem und Voraussetzungen. Erkläre die Schritte und frage vor Änderungen oder Downloads nach. Bis der Installer läuft, sag mir bei jedem Schritt, worauf du wartest: Starte Downloads im Hintergrund und melde ihren Fortschritt, und sag mir Bescheid, wenn eine Freigabe in Hermes oder eine Administrator-Abfrage auf diesem Rechner auf mich wartet.`
         },
         installFromGit: 'Von Git installieren',
         reviewRepository: 'Repository prüfen',

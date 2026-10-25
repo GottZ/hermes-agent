@@ -631,9 +631,10 @@ export const zhOverrides = {
           backendHost: '检查的是已连接的后端，而不是此桌面应用。',
           download: name => `从官方网站下载 ${name}`,
           recheck: '重新检查',
+          checking: '正在后端检查插件的要求…',
           askHermes: '向 Hermes 寻求帮助',
           helpDraft: (name, profile) =>
-            `请帮我在后端计算机为 ${profile} 配置文件安装或更新 ${name}。先检查操作系统和要求，说明步骤，并在修改或下载任何内容之前征求我的同意。`
+            `请帮我在后端计算机为 ${profile} 配置文件安装或更新 ${name}。先检查操作系统和要求，说明步骤，并在修改或下载任何内容之前征求我的同意。在安装程序启动之前，每一步都告诉我你在等待什么：在后台运行下载并报告进度；需要我在 Hermes 中批准，或在那台计算机上确认管理员提示时，请告诉我。`
         },
         installFromGit: '从 Git 安装',
         reviewRepository: '检查仓库',

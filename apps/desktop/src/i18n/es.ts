@@ -797,9 +797,10 @@ export const esOverrides = {
           backendHost: 'Se comprueba el backend conectado, no esta aplicación de escritorio.',
           download: name => `Descargar ${name} del proveedor oficial`,
           recheck: 'Comprobar de nuevo',
+          checking: 'Comprobando los requisitos del plugin en el backend…',
           askHermes: 'Pedir ayuda a Hermes',
           helpDraft: (name, profile) =>
-            `Ayúdame a instalar o actualizar ${name} en el equipo del backend para el perfil ${profile}. Primero comprueba su sistema operativo y requisitos. Explica los pasos y pide permiso antes de cambiar algo o descargar software.`
+            `Ayúdame a instalar o actualizar ${name} en el equipo del backend para el perfil ${profile}. Primero comprueba su sistema operativo y requisitos. Explica los pasos y pide permiso antes de cambiar algo o descargar software. Hasta que el instalador esté en marcha, dime en cada paso qué estás esperando: ejecuta las descargas en segundo plano e informa de su progreso, y avísame cuando una aprobación en Hermes o una solicitud de administrador en ese equipo me necesite.`
         },
         installFromGit: 'Instalar desde Git',
         reviewRepository: 'Revisar repositorio',

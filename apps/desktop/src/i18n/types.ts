@@ -646,6 +646,8 @@ catalog: CatalogTranslations
           backendHost: string
           download: (name: string) => string
           recheck: string
+          /** Shown while the backend's app requirements are being checked. */
+          checking: string
           askHermes: string
           helpDraft: (name: string, profile: string) => string
         }

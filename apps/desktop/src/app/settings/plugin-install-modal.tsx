@@ -621,6 +621,12 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
 
       <div className="space-y-3">
         <ProbeWarnings copy={m} probe={probe} />
+        {/* Install stays disabled until the backend answers; say why instead of waiting silently. */}
+        {checkingApp && (
+          <p aria-live="polite" className={cn(CAPTION, 'text-(--ui-text-secondary)')}>
+            {m.appGuidance.checking}
+          </p>
+        )}
         {guidance && (
           <AppGuidancePanel
             checking={checkingApp || installing}

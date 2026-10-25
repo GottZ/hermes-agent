@@ -794,9 +794,10 @@ export const frOverrides = {
           backendHost: 'La vérification concerne le backend connecté, pas cette application Desktop.',
           download: name => `Télécharger ${name} depuis le site officiel`,
           recheck: 'Vérifier à nouveau',
+          checking: 'Vérification des prérequis du plugin sur le backend…',
           askHermes: 'Demander de l’aide à Hermes',
           helpDraft: (name, profile) =>
-            `Aide-moi à installer ou mettre à jour ${name} sur le backend pour le profil ${profile}. Vérifie d’abord son système et les prérequis. Explique les étapes et demande mon accord avant toute modification ou téléchargement.`
+            `Aide-moi à installer ou mettre à jour ${name} sur le backend pour le profil ${profile}. Vérifie d’abord son système et les prérequis. Explique les étapes et demande mon accord avant toute modification ou téléchargement. Jusqu’au lancement du programme d’installation, dis-moi à chaque étape ce que tu attends : lance les téléchargements en arrière-plan en indiquant leur progression, et préviens-moi quand une autorisation dans Hermes ou une demande d’administrateur sur cet ordinateur m’attend.`
         },
         installFromGit: 'Installer depuis Git',
         reviewRepository: 'Examiner le dépôt',

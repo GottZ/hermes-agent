@@ -140,6 +140,9 @@ describe('A reviewed catalog pick', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask Hermes for help' }))
     expect($composerDraft.get()).toBe('')
     expect($pendingPluginHelpDraft.get()).toContain('Godot 4 on the backend computer for the research profile')
+    // A download or an approval/UAC prompt can take minutes before the installer starts.
+    expect($pendingPluginHelpDraft.get()).toContain('tell me what you are waiting for at every step')
+    expect($pendingPluginHelpDraft.get()).toContain('run downloads in the background and report their progress')
     expect($pluginInstallRequest.get()).toBeNull()
     expect(installCalls()).toHaveLength(0)
     expect(installDesktopPlugin).not.toHaveBeenCalled()
@@ -232,6 +235,23 @@ describe('A reviewed catalog pick', () => {
     expect(screen.getByRole('status').textContent).toContain('Research Bot')
     expect(screen.getByText(/Blender is not installed/)).toBeTruthy()
     expect(installButton().disabled).toBe(true)
+  })
+
+  it('says that the backend is being checked while Install waits for the answer', async () => {
+    const check = deferred<unknown>()
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence' ? check.promise : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    expect(await screen.findByText("Checking the plugin's requirements on the backend…")).toBeTruthy()
+    expect(installButton().disabled).toBe(true)
+    await act(async () => {
+      check.resolve({ presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }] })
+      await check.promise
+    })
+    await waitFor(() => expect(installButton().disabled).toBe(false))
+    expect(screen.queryByText("Checking the plugin's requirements on the backend…")).toBeNull()
   })
 
   it('keeps Ask Hermes from closing the dialog while an install is in flight', async () => {

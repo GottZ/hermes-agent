@@ -83,9 +83,10 @@ export const zhHantSettings = {
           backendHost: '檢查的是已連線的後端，不是此桌面應用程式。',
           download: name => `從官方網站下載 ${name}`,
           recheck: '重新檢查',
+          checking: '正在後端檢查外掛的需求…',
           askHermes: '請 Hermes 協助',
           helpDraft: (name, profile) =>
-            `請協助我在後端電腦為 ${profile} 設定檔安裝或更新 ${name}。先檢查作業系統和需求，說明步驟，並在任何修改或下載前徵求我的同意。`
+            `請協助我在後端電腦為 ${profile} 設定檔安裝或更新 ${name}。先檢查作業系統和需求，說明步驟，並在任何修改或下載前徵求我的同意。在安裝程式啟動之前，每一步都告訴我你在等待什麼：在背景執行下載並回報進度；需要我在 Hermes 中核准，或在那台電腦上確認系統管理員提示時，請告訴我。`
         },
         installUncertain:
           'Hermes 已停止等待安裝結果，但外掛可能仍在安裝中。請關閉此視窗，重新掃描外掛清單後再嘗試安裝。',
