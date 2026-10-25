@@ -318,9 +318,15 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
                if not (result := availability(decl.declaration)).offerable]
     if blocked:
         # Every declared server must pass. Prefer structural incompatibility over a
-        # missing app: installing one app cannot repair an unsupported sibling.
-        order = {"unsupported_os": 0, "unsupported_gpu": 1, "version_too_old": 2, "missing_app": 3}
-        server_name, server_decl, result = min(blocked, key=lambda row: order.get(row[2].state, 4))
+        # missing app: installing one app cannot repair an unsupported sibling. Same
+        # order as the presence card, so the refusal names the blocker the dialog showed.
+        from hermes_cli.plugin_catalog_presence import BLOCKER_RANK
+
+        def rank(row) -> int:
+            state = "uncertain" if row[2].state == "version_too_old" and not row[2].version else row[2].state
+            return BLOCKER_RANK.get(state, len(BLOCKER_RANK))
+
+        server_name, server_decl, result = min(blocked, key=rank)
         display_title = app_title if not app_server or app_server == server_name else None
         problem = availability_problem(result)
         if result.state == "version_too_old" and not result.version:

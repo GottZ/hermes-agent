@@ -352,6 +352,39 @@ def test_install_refusal_guidance_keeps_the_catalog_title_of_a_lone_app(monkeypa
     assert raised.value.app_guidance["app_title"] == "Pay CLI"
 
 
+def test_unsupported_platform_sentence_names_the_os_for_people(monkeypatch):
+    from hermes_cli import plugin_catalog as catalog
+    from hermes_platform.host.facts import os_family
+
+    label = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}[os_family()]
+    elsewhere = "linux" if os_family() != "linux" else "windows"
+    entry = catalog.entry_from_mapping({
+        "name": "elsewhere", "repo": "https://github.com/fx/elsewhere", "sha": "0" * 40, "description": "d.",
+        "maintainer": "fx", "tier": "community", "platforms": [elsewhere]}, "elsewhere")
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [entry])
+    row, = presence.presence_for(["elsewhere"])
+    assert row["sentence"] == f"not supported on {label}"
+
+
+def test_install_refusal_names_the_blocker_the_presence_card_named(monkeypatch, tmp_path):
+    """missing_app outranks version_too_old on both surfaces, so the dialog and refusal agree."""
+    from hermes_cli import agent_plugins
+    from hermes_platform.resolver import availability as availability_mod
+
+    (tmp_path / "plugin.json").write_text("{}")
+    monkeypatch.setattr(agent_plugins, "load_agent_plugin", lambda *_: SimpleNamespace(server_declarations={
+        "old": SimpleNamespace(declaration=SimpleNamespace(name="old", required_gpu=None)),
+        "gone": SimpleNamespace(declaration=SimpleNamespace(name="gone", required_gpu=None)),
+    }))
+    monkeypatch.setattr(availability_mod, "availability", lambda decl: Availability(
+        "version_too_old", min_version="2.0", version="1.0") if decl.name == "old" else Availability("missing_app"))
+    with pytest.raises(PluginOperationError) as raised:
+        install._refuse_unavailable_portable_plugin("studio", tmp_path)
+    assert raised.value.app_server == "gone"
+    assert raised.value.app_guidance["reason"] == "missing_app"
+    assert presence.BLOCKER_RANK["missing_app"] < presence.BLOCKER_RANK["version_too_old"]
+
+
 def test_named_presence_reads_the_live_catalog_once_per_request(monkeypatch):
     """Each live-catalog load re-parses every in-tree entry (1.2 s on a Windows backend)."""
     from hermes_cli import plugin_catalog as catalog

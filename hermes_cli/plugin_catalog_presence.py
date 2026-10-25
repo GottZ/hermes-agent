@@ -44,6 +44,11 @@ UNKNOWN = Presence("unknown")
 # Nothing to check: no portable plugin.json at the pin (the installer gate skips those too) or no server
 # that declares an app or GPU. Distinct from UNKNOWN, which means the declaration could not be judged.
 NO_REQUIREMENTS = Presence("unknown", reason="no_requirements")
+# The one blocker an all-of plugin names, shared with the install refusal so the card, the dialog and
+# the refusal agree: an unsupported or uncertain server must not be masked by an installable sibling.
+BLOCKER_RANK = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2, "missing_app": 3,
+                "version_too_old": 4, "app_not_running": 5, "available": 6}
+_OS_LABELS = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}
 
 def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None, *,
                   catalog: list | None = None):
@@ -176,7 +181,7 @@ def presence(entry: Any, *, catalog: list | None = None) -> Presence:
     here = os_family()
     platforms = getattr(entry, "platforms", ())
     if platforms and here not in normalized_platforms(platforms):
-        return Presence("missing_app", f"not supported on {here}", "unsupported_os")
+        return Presence("missing_app", f"not supported on {_OS_LABELS.get(here, here)}", "unsupported_os")
 
     manifest = _pinned_manifest(entry.repo, entry.sha, entry.subdir)
     if not manifest:
@@ -212,13 +217,8 @@ def presence(entry: Any, *, catalog: list | None = None) -> Presence:
     except Exception:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN
-    # In an all-of plugin, an unsupported or uncertain server must not be masked by an
-    # actionable missing-app sibling (which would misleadingly invite an install).
-    rank = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2,
-            "missing_app": 3, "version_too_old": 4, "app_not_running": 5,
-            "available": 6}
     relevant = [p for p in found if p.reason != "no_requirements"]
-    return min(relevant, key=lambda p: rank[p.reason]) if relevant else NO_REQUIREMENTS
+    return min(relevant, key=lambda p: BLOCKER_RANK[p.reason]) if relevant else NO_REQUIREMENTS
 
 
 def _onboarding_catalog(catalog: list | None = None) -> list:
