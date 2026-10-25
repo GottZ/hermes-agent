@@ -298,7 +298,8 @@ def _ensure_tree_readable(root: Path, plugins_dir: Path) -> None:
             ) from exc
 
 
-def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title: Optional[str] = None) -> None:
+def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title: Optional[str] = None,
+                                        *, app_server: Optional[str] = None) -> None:
     """Refuse a portable plugin whose app is missing here, in the same sentence the runtime surfaces use.
 
     *app_title* is the catalog's human name for the app ("Blender"); without it the server name stands in."""
@@ -313,27 +314,29 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
     except ValueError as exc:
         raise _pc().PluginOperationError(f"Plugin '{plugin_name}' is unavailable: {exc}.",
                                          failure_class="manifest_invalid") from exc
-    for server_decl in package.server_declarations.values():
+    for server_name, server_decl in package.server_declarations.items():
         result = availability(server_decl.declaration)
         if result.offerable:
             continue
+        display_title = app_title if not app_server or app_server == server_name else None
         problem = availability_problem(result)
         if result.state == "version_too_old" and not result.version:
-            reason = (f"could not determine {app_title or plugin_name}'s installed version; "
+            reason = (f"could not determine {display_title or plugin_name}'s installed version; "
                       f"version {result.min_version} or newer is required. Check the app's version "
                       "on this machine before retrying.")
         else:
-            reason = (describe(server_decl.declaration, result, problem, display_name=app_title)
+            reason = (describe(server_decl.declaration, result, problem, display_name=display_title)
                       if problem else f"its app is unavailable ({result.state}).")
         from hermes_cli.plugin_catalog_presence import app_guidance
         # The clone itself is authoritative at the publication gate, not an earlier preflight pin.
         # A custom source has no trusted vendor URL; the catalog identity is attached later.
-        entry = SimpleNamespace(name=plugin_name, repo="", title=app_title or plugin_name)
+        entry = SimpleNamespace(name=plugin_name, repo="", title=display_title or plugin_name)
         error = _pc().PluginOperationError(f"Can't install plugin '{plugin_name}': {reason}",
                                            failure_class="incompatible")
         error.app_guidance = app_guidance(entry, "uncertain" if result.state == "version_too_old" and not result.version
                                           else result.state, required_version=result.min_version,
                                           found_version=result.version)
+        error.app_server = server_name
         raise error
 
 
@@ -384,6 +387,7 @@ def _install_plugin_core(
     allow_removed: bool = False,
     before_swap=None,
     app_title: Optional[str] = None,
+    app_server: Optional[str] = None,
 ) -> tuple[Path, dict, str]:
     """Clone a Git plugin and atomically record its source and exact revision.
 
@@ -470,7 +474,7 @@ def _install_plugin_core(
                 raise _pc().PluginOperationError(
                     "--no-deps cannot replace an active plugin. Retry without --no-deps; "
                     "PM must prepare its dependencies before publication.", failure_class="already_installed")
-        _refuse_unavailable_portable_plugin(plugin_name, tmp_target, app_title)
+        _refuse_unavailable_portable_plugin(plugin_name, tmp_target, app_title, app_server=app_server)
 
         if target.exists() and not force:
             from pm.environments import cli_command_name
@@ -831,7 +835,8 @@ def _app_refusal_result(exc, entry, *, at_reviewed_pin: bool = True) -> dict[str
         from hermes_cli.plugin_catalog_presence import app_guidance
         result["app_guidance"] = (app_guidance(entry, guidance["reason"],
                                   required_version=guidance["required_version"],
-                                  found_version=guidance["found_version"]) if entry and at_reviewed_pin
+                                  found_version=guidance["found_version"],
+                                  server_name=getattr(exc, "app_server", None)) if entry and at_reviewed_pin
                                   else {**guidance, "download_url": None})
     return result
 
@@ -849,7 +854,8 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
         installed = catalog.catalog_install_record(on_disk[0])
         at_reviewed_pin = at_reviewed_pin and bool(installed) and installed.get("sha") == entry.sha
         try:
-            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], (entry.title or None) if at_reviewed_pin else None)
+            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], (entry.title or None) if at_reviewed_pin else None,
+                                                app_server=entry.app_server if at_reviewed_pin else None)
         except _pc().PluginOperationError as exc:
             return _app_refusal_result(exc, entry, at_reviewed_pin=at_reviewed_pin)
         return on_disk

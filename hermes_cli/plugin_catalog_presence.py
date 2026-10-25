@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -35,11 +35,12 @@ class Presence:
     required_version: str | None = None
     found_version: str | None = None
     target_host: str = "backend"
+    server_name: str | None = None
 
 
 UNKNOWN = Presence("unknown")
 
-def _reviewed_app(entry: Any):
+def _reviewed_app(entry: Any, server_name: str | None = None):
     """Only a catalog pin with the exact reviewed server app declaration may name a vendor."""
     from hermes_cli.plugin_catalog import load_catalog_live
     reviewed = next((item for item in load_catalog_live()
@@ -58,15 +59,18 @@ def _reviewed_app(entry: Any):
         servers = (manifest or {}).get("extensions", {}).get("com.nousresearch.hermes", {}).get("servers", {})
         declarations = _server_declarations(manifest, {name: {} for name in servers}) if manifest and isinstance(servers, dict) else {}
         server = declarations.get(reviewed.app_server)
-        return reviewed if server and server.declaration.requires_app and server.declaration.app is not None else None
+        app_servers = [name for name, candidate in declarations.items()
+                       if candidate.declaration.requires_app and candidate.declaration.app is not None]
+        return reviewed if (server and reviewed.app_server in app_servers
+                            and (server_name == reviewed.app_server if server_name else len(app_servers) == 1)) else None
     except (TypeError, ValueError, AttributeError):
         return None
 
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
-                 found_version: str | None = None) -> dict[str, str | None]:
+                 found_version: str | None = None, server_name: str | None = None) -> dict[str, str | None]:
     """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin."""
-    reviewed = _reviewed_app(entry)
+    reviewed = _reviewed_app(entry, server_name)
     return {"reason": reason, "app_title": reviewed.title if reviewed else entry.name,
             "required_version": required_version, "found_version": found_version,
             "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
@@ -161,10 +165,11 @@ def presence(entry: Any) -> Presence:
     except Exception as exc:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
-    reviewed = _reviewed_app(entry)
-    title = reviewed.title if reviewed else entry.name
+    reviewed = _reviewed_app(entry, entry.app_server) if getattr(entry, "app_server", None) else None
     try:
-        found = [_server_presence(d.declaration, d.liveness, title) for d in declarations.values()]
+        found = [replace(_server_presence(d.declaration, d.liveness,
+                                          reviewed.title if reviewed and name == reviewed.app_server else entry.name),
+                         server_name=name) for name, d in declarations.items()]
     except Exception:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN
@@ -208,7 +213,7 @@ def onboarding_entries() -> list[dict[str, Any]]:
             "app_state": found.state,
             "sentence": found.sentence,
             **app_guidance(entry, found.reason, required_version=found.required_version,
-                           found_version=found.found_version),
+                           found_version=found.found_version, server_name=found.server_name),
         })
     return rows
 
@@ -230,7 +235,7 @@ def presence_for(names: list[str]) -> list[dict[str, Any]]:
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
              "sentence": state.sentence, "disclosure": _disclosure(entry.description),
              **app_guidance(entry, state.reason, required_version=state.required_version,
-                            found_version=state.found_version)}
+                            found_version=state.found_version, server_name=state.server_name)}
             for entry, state in zip(entries, found)]
 
 

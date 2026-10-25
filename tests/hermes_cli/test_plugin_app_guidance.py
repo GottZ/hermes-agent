@@ -111,6 +111,28 @@ def test_reviewed_link_does_not_name_a_different_declared_app(monkeypatch):
     assert presence.presence(reviewed).sentence == "needs nvidia-app"
 
 
+def test_missing_sibling_never_inherits_other_servers_vendor_link(monkeypatch):
+    from hermes_cli import plugin_catalog as catalog
+
+    reviewed = next(e for e in catalog.load_catalog() if e.name == "nvidia-app")
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [reviewed])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: {"extensions": {
+        "com.nousresearch.hermes": {"servers": {
+            "nvidia-app": {"app": {"win32": {"presence": "executable", "location": "C:/NVIDIA.exe"}},
+                           "requires": {"app": True}},
+            "other-app": {"app": {"win32": {"presence": "executable", "location": "C:/Other.exe"}},
+                          "requires": {"app": True}},
+        }}}})
+    monkeypatch.setattr(presence, "_server_presence", lambda decl, live, title:
+                        presence.Presence("missing_app", f"needs {title}", "missing_app")
+                        if decl.name == "other-app" else presence.Presence("present", reason="available"))
+    row, = presence.presence_for(["nvidia-app"])
+    assert row["reason"] == "missing_app"
+    assert row["download_url"] is None
+    assert row["app_title"] == "nvidia-app"
+    assert row["sentence"] == "needs nvidia-app"
+
+
 def test_reviewed_catalog_metadata_rejects_forged_url_and_undeclared_app(monkeypatch):
     from hermes_cli import plugin_catalog as catalog
 
@@ -261,6 +283,21 @@ def test_unsupported_server_takes_priority_over_an_installable_missing_app(monke
     assert found.reason == "unsupported_gpu"
 
 
+def test_install_refusal_never_labels_a_sibling_app_as_reviewed_vendor(monkeypatch, tmp_path):
+    from hermes_cli import agent_plugins
+    from hermes_platform.resolver import availability as availability_mod
+
+    (tmp_path / "plugin.json").write_text("{}")
+    monkeypatch.setattr(agent_plugins, "load_agent_plugin", lambda *_: SimpleNamespace(server_declarations={
+        "other-app": SimpleNamespace(declaration=SimpleNamespace(name="other-app", required_gpu=None)),
+    }))
+    monkeypatch.setattr(availability_mod, "availability", lambda *_: Availability("missing_app"))
+    with pytest.raises(PluginOperationError) as raised:
+        install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App", app_server="nvidia-app")
+    assert "NVIDIA App" not in str(raised.value)
+    assert raised.value.app_server == "other-app"
+
+
 def test_install_refusal_carries_typed_reason_without_publishing(monkeypatch, tmp_path):
     from hermes_platform.resolver import availability as availability_mod
     from hermes_cli import agent_plugins
@@ -313,7 +350,7 @@ def test_retry_from_disabled_installed_tree_rechecks_hard_app_gate(monkeypatch, 
     monkeypatch.setattr(plugins_cmd_catalog, "install_catalog_entry", lambda *_a, **_k:
                         pytest.fail("must not re-clone or bypass gate"))
 
-    def blocked(name, tree, title):
+    def blocked(name, tree, title, *, app_server=None):
         error = PluginOperationError("app disappeared", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title, "required_version": "11.0",
                               "found_version": None, "download_url": None, "target_host": "backend"}
@@ -352,7 +389,7 @@ def test_off_pin_refusal_never_uses_reviewed_vendor_metadata(monkeypatch, tmp_pa
     (tmp_path / "plugin.json").write_text("{}")
     monkeypatch.setattr(install, "_catalog_install_on_disk", lambda *_: (tmp_path, {}, "nvidia-app"))
 
-    def refused(name, tree, title):
+    def refused(name, tree, title, *, app_server=None):
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title or name,
                               "required_version": "11.0", "found_version": None,
@@ -377,7 +414,7 @@ def test_disabled_off_pin_tree_without_ref_does_not_gain_reviewed_link(monkeypat
     monkeypatch.setattr(install, "_catalog_install_on_disk", lambda *_: (tmp_path, {}, "nvidia-app"))
     monkeypatch.setattr(plugins_cmd_catalog, "catalog_install_record", lambda *_: {"sha": "b" * 40})
 
-    def refused(name, tree, title):
+    def refused(name, tree, title, *, app_server=None):
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title or name,
                               "required_version": None, "found_version": None,
