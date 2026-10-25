@@ -309,6 +309,49 @@ def test_pin_without_plugin_json_has_no_requirements_but_a_failed_read_stays_unc
     assert rows["offline"]["reason"] == "uncertain"
 
 
+def _titled_entry(name, title):
+    from hermes_cli import plugin_catalog as catalog
+
+    return catalog.entry_from_mapping({
+        "name": name, "repo": f"https://github.com/fx/{name}", "sha": "0" * 40, "title": title,
+        "description": f"{name} does things.", "maintainer": "fx", "tier": "community"}, name)
+
+
+def test_lone_app_requirement_keeps_the_catalog_title_without_annotation(monkeypatch):
+    """pay-cli: hard-gated, titled "Pay CLI", no app_server; the name needs no reviewed vendor link."""
+    from hermes_cli import plugin_catalog as catalog
+
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_titled_entry("pay-cli", "Pay CLI")])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: _manifest_for("pay-cli"))
+    row, = presence.presence_for(["pay-cli"])
+    assert row["sentence"] == "needs Pay CLI" and row["app_title"] == "Pay CLI"
+    assert row["download_url"] is None
+
+
+def test_several_unannotated_apps_do_not_borrow_the_catalog_title(monkeypatch):
+    from hermes_cli import plugin_catalog as catalog
+
+    servers = NEEDS_APP["extensions"]["com.nousresearch.hermes"]["servers"]["paint"]
+    two_apps = {"extensions": {"com.nousresearch.hermes": {"servers": {"paint": servers, "print": servers}}}}
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_titled_entry("studio", "Paint Studio")])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: two_apps)
+    row, = presence.presence_for(["studio"])
+    assert "Paint Studio" not in row["sentence"] and row["app_title"] == "studio"
+
+
+def test_install_refusal_guidance_keeps_the_catalog_title_of_a_lone_app(monkeypatch, tmp_path):
+    from hermes_platform.resolver import availability as availability_mod
+    from hermes_cli import agent_plugins
+
+    (tmp_path / "plugin.json").write_text("{}")
+    monkeypatch.setattr(agent_plugins, "load_agent_plugin", lambda *_:
+                        SimpleNamespace(server_declarations={"pay": SimpleNamespace(declaration=_decl())}))
+    monkeypatch.setattr(availability_mod, "availability", lambda decl: Availability("missing_app", min_version="11.0"))
+    with pytest.raises(PluginOperationError) as raised:
+        install._refuse_unavailable_portable_plugin("pay-cli", tmp_path, "Pay CLI")
+    assert raised.value.app_guidance["app_title"] == "Pay CLI"
+
+
 def test_named_presence_reads_the_live_catalog_once_per_request(monkeypatch):
     """Each live-catalog load re-parses every in-tree entry (1.2 s on a Windows backend)."""
     from hermes_cli import plugin_catalog as catalog
@@ -422,8 +465,9 @@ def test_install_refusal_carries_typed_reason_without_publishing(monkeypatch, tm
         "missing_app", min_version="11.0"))
     with pytest.raises(PluginOperationError) as raised:
         install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App")
+    # The same name the refusal sentence uses; only the vendor link needs the reviewed pin.
     assert raised.value.app_guidance == {
-        "reason": "missing_app", "app_title": "nvidia-app", "required_version": "11.0",
+        "reason": "missing_app", "app_title": "NVIDIA App", "required_version": "11.0",
         "found_version": None, "download_url": None, "target_host": "backend"}
 
 

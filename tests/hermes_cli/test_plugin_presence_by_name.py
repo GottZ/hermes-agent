@@ -70,9 +70,9 @@ def test_rows_in_the_order_asked_without_removed_names(catalog):
 def test_row_shape_state_and_disclosure(catalog):
     rows = {row["name"]: row for row in presence_mod.presence_for(["app", "dashed", "broken"])}
 
-    assert rows["app"] == {"name": "app", "title": "Fx App", "state": "missing_app", "sentence": "needs app",
+    assert rows["app"] == {"name": "app", "title": "Fx App", "state": "missing_app", "sentence": "needs Fx App",
                            "disclosure": "the tools change Fx settings; nothing leaves loopback.",
-                           "reason": "missing_app", "app_title": "app", "required_version": None,
+                           "reason": "missing_app", "app_title": "Fx App", "required_version": None,
                            "found_version": None, "download_url": None, "target_host": "backend"}
     assert rows["dashed"]["title"] == "dashed"
     assert rows["dashed"]["disclosure"] == "reads the cron file under HERMES_HOME."

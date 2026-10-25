@@ -37,6 +37,7 @@ class Presence:
     found_version: str | None = None
     target_host: str = "backend"
     server_name: str | None = None
+    app_title: str | None = None  # the name ``sentence`` used for the app
 
 
 UNKNOWN = Presence("unknown")
@@ -79,10 +80,13 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
                  found_version: str | None = None, server_name: str | None = None,
-                 actual_declaration: Any = None, catalog: list | None = None) -> dict[str, str | None]:
-    """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin."""
+                 actual_declaration: Any = None, catalog: list | None = None,
+                 app_title: str | None = None) -> dict[str, str | None]:
+    """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin.
+
+    *app_title* is the name the caller already showed for the app; the vendor link never follows it."""
     reviewed = _reviewed_app(entry, server_name, actual_declaration, catalog=catalog)
-    return {"reason": reason, "app_title": reviewed.title if reviewed else entry.name,
+    return {"reason": reason, "app_title": reviewed.title if reviewed else (app_title or entry.name),
             "required_version": required_version, "found_version": found_version,
             "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
             "target_host": "backend"}
@@ -191,10 +195,20 @@ def presence(entry: Any, *, catalog: list | None = None) -> Presence:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
     reviewed = _reviewed_app(entry, entry.app_server, catalog=catalog) if getattr(entry, "app_server", None) else None
+    app_servers = [name for name, d in declarations.items() if getattr(d.declaration, "app", None) is not None]
+
+    def title_for(name: str) -> str:
+        if reviewed and name == reviewed.app_server:
+            return reviewed.title
+        # Unannotated, the catalog title still names a lone app ("Pay CLI"); next to another app it
+        # could misname the sibling, and an annotated entry off its reviewed pin names none.
+        if not getattr(entry, "app_server", None) and app_servers == [name]:
+            return getattr(entry, "title", "") or entry.name
+        return entry.name
+
     try:
-        found = [replace(_server_presence(d.declaration, d.liveness,
-                                          reviewed.title if reviewed and name == reviewed.app_server else entry.name),
-                         server_name=name) for name, d in declarations.items()]
+        found = [replace(_server_presence(d.declaration, d.liveness, title_for(name)),
+                         server_name=name, app_title=title_for(name)) for name, d in declarations.items()]
     except Exception:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN
@@ -241,7 +255,8 @@ def onboarding_entries() -> list[dict[str, Any]]:
             "app_state": found.state,
             "sentence": found.sentence,
             **app_guidance(entry, found.reason, required_version=found.required_version,
-                           found_version=found.found_version, server_name=found.server_name, catalog=catalog),
+                           found_version=found.found_version, server_name=found.server_name, catalog=catalog,
+                           app_title=found.app_title),
         })
     return rows
 
@@ -264,7 +279,8 @@ def presence_for(names: list[str]) -> list[dict[str, Any]]:
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
              "sentence": state.sentence, "disclosure": _disclosure(entry.description),
              **app_guidance(entry, state.reason, required_version=state.required_version,
-                            found_version=state.found_version, server_name=state.server_name, catalog=catalog)}
+                            found_version=state.found_version, server_name=state.server_name, catalog=catalog,
+                            app_title=state.app_title)}
             for entry, state in zip(entries, found)]
 
 
