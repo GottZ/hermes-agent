@@ -36,6 +36,15 @@ const DEEP_LINK_ERROR_KEYS: Record<PluginCatalogLookupError, string> = {
   unknown: 'skills.plugins.deepLinkCatalogUnknown'
 }
 
+/** Same actionable lookup failure on deep links and owner-scoped setup cards. */
+export function notifyPluginCatalogLookupError(name: string, error: PluginCatalogLookupError): void {
+  notify({
+    kind: 'error',
+    title: translateNow('skills.plugins.deepLinkErrorTitle'),
+    message: translateNow(DEEP_LINK_ERROR_KEYS[error], name.trim())
+  })
+}
+
 /**
  * `hermes://plugin/install?catalog=<name>`: resolve the name against the live
  * catalog and open the dialog in catalog mode for the active profile. Any
@@ -49,11 +58,7 @@ export async function requestPluginCatalogInstallFromDeepLink(
   const result = await lookup(name)
 
   if (!result.ok) {
-    notify({
-      kind: 'error',
-      title: translateNow('skills.plugins.deepLinkErrorTitle'),
-      message: translateNow(DEEP_LINK_ERROR_KEYS[result.error], name.trim())
-    })
+    notifyPluginCatalogLookupError(name, result.error)
 
     return
   }

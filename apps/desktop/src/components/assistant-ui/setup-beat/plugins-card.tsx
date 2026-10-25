@@ -11,7 +11,7 @@ import { useConnectionOwner } from '@/components/assistant-ui/use-connection-own
 import { Button } from '@/components/ui/button'
 import { Chip } from '@/components/ui/chip'
 import { useI18n } from '@/i18n'
-import { lookupPluginCatalogEntry } from '@/lib/plugin-catalog'
+import { type CatalogLookupReply, lookupPluginCatalogEntry } from '@/lib/plugin-catalog'
 import { cn } from '@/lib/utils'
 import {
   $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsError,
@@ -21,7 +21,7 @@ import {
 } from '@/store/agent-plugins'
 import type { ConnectionOwner } from '@/store/connection-request'
 import { requestGatewayForAgent } from '@/store/gateway'
-import { openCatalogPluginInstall } from '@/store/plugin-catalog-install'
+import { notifyPluginCatalogLookupError, openCatalogPluginInstall } from '@/store/plugin-catalog-install'
 
 import { CARD_ACTION_CLASS, CARD_CHIP_CLASS, CARD_LABEL_CLASS } from './card-type'
 
@@ -40,11 +40,16 @@ async function readPresence(owner: ConnectionOwner, names: string[]): Promise<Ca
 }
 
 async function openInstall(name: string, title: string, owner: ConnectionOwner): Promise<void> {
-  const lookup = await lookupPluginCatalogEntry(name)
+  const lookup = await lookupPluginCatalogEntry(name, {
+    request: (method, params) =>
+      requestGatewayForAgent<CatalogLookupReply>(owner.connectionId, owner.profile, method, params)
+  })
 
   if (lookup.ok) {
     // The card stays in the chat and flips the row to Installed when the plugin list reloads.
     openCatalogPluginInstall(lookup.entry, owner, { stayAfterInstall: true, title })
+  } else {
+    notifyPluginCatalogLookupError(name, lookup.error)
   }
 }
 

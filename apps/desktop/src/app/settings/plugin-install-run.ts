@@ -203,7 +203,8 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
 
   if (agentResult?.timedOut) {
     void loadAgentPlugins(deps.requestGateway, plan.profile,
-      typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null)
+      typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
+      { force: true })
 
     return { status: 'uncertain' }
   }
@@ -213,7 +214,8 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
   }
 
   await loadAgentPlugins(deps.requestGateway, plan.profile,
-    typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null)
+    typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
+    { force: true })
 
   for (const message of report.successes) {
     notify({ kind: 'success', message })

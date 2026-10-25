@@ -8,7 +8,7 @@ const { routedRequest, lookup } = vi.hoisted(() => ({
     params.action === 'presence'
       ? { presence: [{ name: 'nvidia-app', title: 'NVIDIA App', state: 'missing_app', sentence: 'needs NVIDIA App' }] }
       : { plugins: [] }),
-  lookup: vi.fn(async () => ({ ok: true, entry: {
+  lookup: vi.fn(async (_name: string, _options?: { request: (method: 'plugins.catalog.lookup', params: { name: string }) => Promise<unknown> }) => ({ ok: true, entry: {
     name: 'nvidia-app', repo: 'https://github.com/NousResearch/hermes-nvidia', sha: 'a'.repeat(40)
   } }))
 }))
@@ -37,6 +37,7 @@ import {
   $agentPluginsLoadingByOwner,
   $agentPluginsProfile
 } from '@/store/agent-plugins'
+import { $notifications } from '@/store/notifications'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
 
 import { PluginsCard } from './plugins-card'
@@ -50,6 +51,7 @@ beforeEach(() => {
   $agentPluginsProfile.set(undefined)
   $agentPluginsConnectionId.set(undefined)
   closePluginInstallRequest()
+  $notifications.set([])
   routedRequest.mockReset()
   routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
     params.action === 'presence'
@@ -64,6 +66,10 @@ afterEach(() => {
 })
 
 it('loads the chat owner inventory and pins the full owner when installing from setup', async () => {
+  lookup.mockImplementationOnce(async (name, options) => {
+    await options!.request('plugins.catalog.lookup', { name })
+    return { ok: true, entry: { name, repo: 'https://github.com/NousResearch/hermes-nvidia', sha: 'a'.repeat(40) } }
+  })
   render(
     <QueryClientProvider client={queryClient}>
       <PluginsCard names={['nvidia-app']} onContinue={vi.fn()} />
@@ -75,7 +81,9 @@ it('loads the chat owner inventory and pins the full owner when installing from 
     expect.objectContaining({ action: 'list', profile: 'workbot' }), undefined)
   expect(routedRequest).toHaveBeenCalledWith('local', 'workbot', 'plugins.manage',
     expect.objectContaining({ action: 'presence', names: ['nvidia-app'] }))
-  expect(lookup).toHaveBeenCalledWith('nvidia-app')
+  expect(lookup).toHaveBeenCalledWith('nvidia-app', expect.objectContaining({ request: expect.any(Function) }))
+  expect(routedRequest).toHaveBeenCalledWith('local', 'workbot', 'plugins.catalog.lookup',
+    { name: 'nvidia-app' })
 })
 
 it('requires an owner inventory retry rather than treating a failed list as not installed', async () => {
@@ -117,4 +125,16 @@ it('shows a retry instead of no plugins when the backend presence query fails', 
       : { plugins: [] })
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   expect(await screen.findByRole('button', { name: /NVIDIA App/ })).toBeTruthy()
+})
+
+it('explains a catalog lookup failure on the chat backend instead of silently doing nothing', async () => {
+  lookup.mockResolvedValueOnce({ ok: false, error: 'unavailable' } as never)
+  render(
+    <QueryClientProvider client={queryClient}>
+      <PluginsCard names={['nvidia-app']} onContinue={vi.fn()} />
+    </QueryClientProvider>
+  )
+  fireEvent.click(await screen.findByRole('button', { name: /NVIDIA App/ }))
+  await waitFor(() => expect($notifications.get()[0]?.message).toContain('Could not load the Hermes plugin catalog'))
+  expect($pluginInstallRequest.get()).toBeNull()
 })

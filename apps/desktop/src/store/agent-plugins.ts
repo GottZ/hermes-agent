@@ -176,15 +176,17 @@ const withProfile = (params: Record<string, unknown>, profile?: string | null) =
  *  HERMES_HOME. Always refetches (it's a cheap local disk scan on the
  *  backend); concurrent callers for the SAME profile share one in-flight
  *  request — a different profile starts fresh so a scope switch can't get a
- *  stale list. */
+ *  stale list. Force after a completed install to bypass a pre-install read;
+ *  owner generations keep its late result from replacing the new snapshot. */
 export function loadAgentPlugins(
   request: GatewayRequest,
   profile?: string | null,
-  connectionId: string | null = null
+  connectionId: string | null = null,
+  { force = false }: { force?: boolean } = {}
 ): Promise<void> {
   const scope = profile ?? null
 
-  if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
+  if (!force && inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
     return inflight
   }
 

@@ -70,6 +70,22 @@ describe('loadAgentPlugins connection ownership', () => {
     expect($agentPlugins.get()[0].status).toBe('enabled')
   })
 
+  it('starts a fresh owner list after install while an older pre-install list is in flight', async () => {
+    let finishOld!: (value: { plugins: AgentPluginRow[] }) => void
+    const installed = row({ key: 'weather', catalog_name: 'weather' })
+    const request = vi.fn(() => request.mock.calls.length === 1
+      ? new Promise<{ plugins: AgentPluginRow[] }>(resolve => { finishOld = resolve })
+      : Promise.resolve({ plugins: [installed] }))
+    const stale = loadAgentPlugins(request as never, 'workbot', 'local')
+    const fresh = loadAgentPlugins(request as never, 'workbot', 'local', { force: true })
+    expect(request).toHaveBeenCalledTimes(2)
+    await fresh
+    finishOld({ plugins: [] })
+    await stale
+    expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')].map(item => item.catalog_name))
+      .toEqual(['weather'])
+  })
+
   it('retains owner A list failure even when owner B refreshes first', async () => {
     let failA!: (reason: Error) => void
     const a = loadAgentPlugins(vi.fn(() => new Promise((_resolve, reject) => { failA = reject })) as never,
