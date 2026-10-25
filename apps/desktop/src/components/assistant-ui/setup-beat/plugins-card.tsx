@@ -14,10 +14,18 @@ import { useI18n } from '@/i18n'
 import { type CatalogLookupReply, lookupPluginCatalogEntry } from '@/lib/plugin-catalog'
 import { cn } from '@/lib/utils'
 import {
-  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsError,
-  $agentPluginsErrorByOwner, $agentPluginsLoadingByOwner, $agentPluginsProfile,
-  $agentPluginsStatus, type AgentPluginRow, type AgentPluginsStatus,
-  loadAgentPlugins, pluginInventoryKey
+  $agentPlugins,
+  $agentPluginsByOwner,
+  $agentPluginsConnectionId,
+  $agentPluginsError,
+  $agentPluginsErrorByOwner,
+  $agentPluginsLoadingByOwner,
+  $agentPluginsProfile,
+  $agentPluginsStatus,
+  type AgentPluginRow,
+  type AgentPluginsStatus,
+  loadAgentPlugins,
+  pluginInventoryKey
 } from '@/store/agent-plugins'
 import type { ConnectionOwner } from '@/store/connection-request'
 import { requestGatewayForAgent } from '@/store/gateway'
@@ -55,30 +63,40 @@ async function openInstall(name: string, title: string, owner: ConnectionOwner):
 
 function loadOwnerInventory(owner: ConnectionOwner): Promise<void> {
   return loadAgentPlugins(
-    (method, params, timeoutMs) =>
-      requestGatewayForAgent(owner.connectionId, owner.profile, method, params, timeoutMs),
+    (method, params, timeoutMs) => requestGatewayForAgent(owner.connectionId, owner.profile, method, params, timeoutMs),
     owner.profile,
     owner.connectionId
   )
 }
 
-function cardInventory(owner: ConnectionOwner | null, state: {
-  snapshots: Record<string, AgentPluginRow[]>
-  errors: Record<string, string | null>
-  loading: Record<string, boolean>
-  shared: AgentPluginRow[]
-  sharedError: string | null
-  sharedStatus: AgentPluginsStatus
-  loadedProfile: string | null | undefined
-  loadedConnection: string | null | undefined
-}) {
+function cardInventory(
+  owner: ConnectionOwner | null,
+  state: {
+    snapshots: Record<string, AgentPluginRow[]>
+    errors: Record<string, string | null>
+    loading: Record<string, boolean>
+    shared: AgentPluginRow[]
+    sharedError: string | null
+    sharedStatus: AgentPluginsStatus
+    loadedProfile: string | null | undefined
+    loadedConnection: string | null | undefined
+  }
+) {
   const key = owner?.connectionId ? pluginInventoryKey(owner.connectionId, owner.profile) : null
-  const rows = key ? state.snapshots[key]
-    : owner && state.loadedConnection === null && state.loadedProfile === owner.profile && state.sharedStatus === 'ready'
-      ? state.shared : undefined
+
+  const rows = key
+    ? state.snapshots[key]
+    : owner &&
+        state.loadedConnection === null &&
+        state.loadedProfile === owner.profile &&
+        state.sharedStatus === 'ready'
+      ? state.shared
+      : undefined
+
   const error = key ? state.errors[key] : state.sharedStatus === 'error' ? state.sharedError : null
   const pending = key ? rows === undefined || Boolean(state.loading[key]) : Boolean(owner) && rows === undefined
   const installed = new Set((rows ?? []).flatMap(row => (row.catalog_name ? [row.catalog_name, row.name] : [row.name])))
+
   return { installed, error, pending }
 }
 
@@ -89,7 +107,11 @@ const PLUGIN_ICON = (
 )
 
 function PluginChips({
-  rows, installed, owner, installedLabel, installLabel
+  rows,
+  installed,
+  owner,
+  installedLabel,
+  installLabel
 }: {
   rows: CatalogPluginPresence[]
   installed: Set<string>
@@ -97,24 +119,29 @@ function PluginChips({
   installedLabel: string
   installLabel: string
 }) {
-  return <div className="grid grid-cols-2 gap-2 p-1">
-    {rows.map(row => {
-      const on = installed.has(row.name)
-      return <Chip
-        className={cn('w-full', CARD_CHIP_CLASS)}
-        icon={PLUGIN_ICON}
-        key={row.name}
-        label={row.title || row.name}
-        on={on}
-        onToggle={() => {
-          if (!on && owner) {
-            void openInstall(row.name, row.title || row.name, owner)
-          }
-        }}
-        sub={on ? installedLabel : row.sentence || installLabel}
-      />
-    })}
-  </div>
+  return (
+    <div className="grid grid-cols-2 gap-2 p-1">
+      {rows.map(row => {
+        const on = installed.has(row.name)
+
+        return (
+          <Chip
+            className={cn('w-full', CARD_CHIP_CLASS)}
+            icon={PLUGIN_ICON}
+            key={row.name}
+            label={row.title || row.name}
+            on={on}
+            onToggle={() => {
+              if (!on && owner) {
+                void openInstall(row.name, row.title || row.name, owner)
+              }
+            }}
+            sub={on ? installedLabel : row.sentence || installLabel}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 /** The plugins this OS runs, from the card payload; Install opens the reviewed install dialog in place,
@@ -153,9 +180,19 @@ export function PluginsCard({
     staleTime: Infinity
   })
 
-  const { installed, error: inventoryError, pending: inventoryPending } = cardInventory(owner, {
-    snapshots: inventories, errors: ownerErrors, loading: ownerLoading,
-    shared, sharedError, sharedStatus, loadedProfile, loadedConnection
+  const {
+    installed,
+    error: inventoryError,
+    pending: inventoryPending
+  } = cardInventory(owner, {
+    snapshots: inventories,
+    errors: ownerErrors,
+    loading: ownerLoading,
+    shared,
+    sharedError,
+    sharedStatus,
+    loadedProfile,
+    loadedConnection
   })
 
   const rows = presence.data ?? []
@@ -168,23 +205,38 @@ export function PluginsCard({
         </p>
       ) : presence.isError ? (
         <div role="alert">
-          <p className={CARD_LABEL_CLASS}>{t.skills.plugins.loadFailed}: {String(presence.error)}</p>
-          <Button onClick={() => void presence.refetch()} size="sm" variant="outline">{t.catalog.retry}</Button>
+          <p className={CARD_LABEL_CLASS}>
+            {t.skills.plugins.loadFailed}: {String(presence.error)}
+          </p>
+          <Button onClick={() => void presence.refetch()} size="sm" variant="outline">
+            {t.catalog.retry}
+          </Button>
         </div>
       ) : inventoryError ? (
         <div role="alert">
-          <p className={CARD_LABEL_CLASS}>{t.skills.plugins.loadFailed}: {inventoryError}</p>
-          {owner && <Button onClick={() => void loadOwnerInventory(owner)} size="sm" variant="outline">
-            {t.catalog.retry}
-          </Button>}
+          <p className={CARD_LABEL_CLASS}>
+            {t.skills.plugins.loadFailed}: {inventoryError}
+          </p>
+          {owner && (
+            <Button onClick={() => void loadOwnerInventory(owner)} size="sm" variant="outline">
+              {t.catalog.retry}
+            </Button>
+          )}
         </div>
       ) : inventoryPending ? (
-        <p className={CARD_LABEL_CLASS} role="status">{copy.loading}</p>
+        <p className={CARD_LABEL_CLASS} role="status">
+          {copy.loading}
+        </p>
       ) : rows.length === 0 ? (
         <p className={CARD_LABEL_CLASS}>{copy.noPlugins}</p>
       ) : (
-        <PluginChips rows={rows} installed={installed} owner={owner}
-          installedLabel={copy.installed} installLabel={copy.install} />
+        <PluginChips
+          installed={installed}
+          installedLabel={copy.installed}
+          installLabel={copy.install}
+          owner={owner}
+          rows={rows}
+        />
       )}
       <div>
         <Button

@@ -1,7 +1,12 @@
 import { JsonRpcGatewayError } from '@hermes/shared'
 import { describe, expect, it, vi } from 'vitest'
 
-import { appGuidanceFromError, isAppBlocked, officialAppDownloadUrl, presenceForCatalogPlugin } from './plugin-app-guidance'
+import {
+  appGuidanceFromError,
+  isAppBlocked,
+  officialAppDownloadUrl,
+  presenceForCatalogPlugin
+} from './plugin-app-guidance'
 
 const missing = {
   reason: 'missing_app',

@@ -73,6 +73,7 @@ function profileParam(scope: ProfileScope): null | string {
 /** The desktop-half reconciler is local to Electron, not to the foreground chat. */
 function isRemotePluginOwner(profile: ProfileScope, foregroundRemote: boolean): boolean {
   const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() : null
+
   return connectionId
     ? connectionId !== 'local' && registryConnectionKind(connectionId) !== 'local'
     : foregroundRemote
@@ -159,8 +160,7 @@ const updateTargetLabel = (agent: AgentPluginRow) =>
   agent.catalog_version ?? agent.catalog_sha?.slice(0, 8) ?? shortTarget(agent.update_target)
 
 /** A full commit shortens to 8 characters; a feed version stays as it is. */
-const shortTarget = (target?: string) =>
-  target && /^[0-9a-f]{40}$/i.test(target) ? target.slice(0, 8) : (target ?? '')
+const shortTarget = (target?: string) => (target && /^[0-9a-f]{40}$/i.test(target) ? target.slice(0, 8) : (target ?? ''))
 
 function KindBadge({ kind }: { kind: PackageKind }) {
   const { t } = useI18n()
@@ -562,8 +562,10 @@ export function PluginActions({ profile }: { profile: ProfileScope }) {
   const { requestGateway: ambientRequest } = useGatewayRequest()
   const scope = profileParam(profile)
   const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() || null : null
+
   const requestGateway = useMemo(
-    () => pluginOwnerRequest(profile, ambientRequest),
+    // Built from the derived owner, not the scope object, whose identity may change every render.
+    () => pluginOwnerRequest(connectionId ? { connectionId, profile: scope } : null, ambientRequest),
     [ambientRequest, connectionId, scope]
   )
 
@@ -629,10 +631,13 @@ export const PluginsTab = memo(function PluginsTab({
   const label = scopeLabel ?? scope ?? t.skills.plugins.defaultProfile
   const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() || null : null
   const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
+
   const requestGateway = useMemo(
-    () => pluginOwnerRequest(profile, ambientRequest),
+    // Built from the derived owner, not the scope object, whose identity may change every render.
+    () => pluginOwnerRequest(connectionId ? { connectionId, profile: scope } : null, ambientRequest),
     [ambientRequest, connectionId, scope]
   )
+
   const ownRows = connectionId ? ownerInventories[pluginInventoryKey(connectionId, scope)] : agentRows
   const ownError = connectionId ? ownerErrors[pluginInventoryKey(connectionId, scope)] : error
 
@@ -703,11 +708,13 @@ export const PluginsTab = memo(function PluginsTab({
 
     for (const entry of installedEntries) {
       const pkg = packageById.get(entry.id)
+
       // A Desktop half is app-wide, not evidence that this selected backend
       // has the Agent half. Keep catalog Install available for that owner.
       if (pkg?.agentMissingInProfile) {
         continue
       }
+
       const name = pkg?.agent?.catalog_name ?? pkg?.desktop?.packageOrigin?.catalogName
 
       if (name) {
@@ -749,7 +756,7 @@ export const PluginsTab = memo(function PluginsTab({
         }
       })
     },
-    [label, p, requestGateway, scope]
+    [connectionId, label, p, requestGateway, scope]
   )
 
   const handleDesktopRemove = useCallback(
@@ -829,6 +836,7 @@ export const PluginsTab = memo(function PluginsTab({
       onInstall={entry => {
         const missingAgentHalf = packages.some(pkg =>
           pkg.agentMissingInProfile && pkg.desktop?.packageOrigin?.catalogName === entry.name)
+
         openCatalogPluginInstall(entry, profile, {
           tier: entry.source,
           ...(missingAgentHalf ? { legacyHint: 'agent' as const } : {})

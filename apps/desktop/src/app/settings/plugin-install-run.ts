@@ -202,9 +202,12 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
   }
 
   if (agentResult?.timedOut) {
-    void loadAgentPlugins(deps.requestGateway, plan.profile,
+    void loadAgentPlugins(
+      deps.requestGateway,
+      plan.profile,
       typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
-      { force: true })
+      { force: true }
+    )
 
     return { status: 'uncertain' }
   }
@@ -213,9 +216,12 @@ export async function runPluginInstall(plan: InstallPlan, deps: InstallDeps): Pr
     await installDesktopHalf(plan, components, deps.copy, report, agentResult)
   }
 
-  await loadAgentPlugins(deps.requestGateway, plan.profile,
+  await loadAgentPlugins(
+    deps.requestGateway,
+    plan.profile,
     typeof plan.request.profile === 'object' ? plan.request.profile?.connectionId?.trim() || null : null,
-    { force: true })
+    { force: true }
+  )
 
   for (const message of report.successes) {
     notify({ kind: 'success', message })

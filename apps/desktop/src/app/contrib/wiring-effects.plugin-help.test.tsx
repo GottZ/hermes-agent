@@ -11,7 +11,11 @@ afterEach(() => cleanup())
 
 it('places user-requested help in the newly rotated fresh chat, not the previous draft', () => {
   const old = rotateFreshDraftKey()
-  const startFresh = vi.fn(() => { rotateFreshDraftKey() })
+
+  const startFresh = vi.fn(() => {
+    rotateFreshDraftKey()
+  })
+
   renderHook(() => useFreshSessionRequest(startFresh))
   act(() => {
     queuePluginHelpDraft('Help with Godot 4 on the backend')

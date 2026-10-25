@@ -122,12 +122,17 @@ describe('openCatalogPluginInstall', () => {
       }
     ])
 
-    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
-      connectionId: 'local', profile: 'workbot'
-    })
+    openCatalogPluginInstall(
+      { name: 'weather', repo: 'https://github.com/x/weather' },
+      {
+        connectionId: 'local',
+        profile: 'workbot'
+      }
+    )
 
     expect($pluginInstallRequest.get()).toMatchObject({
-      catalogName: 'weather', profile: { connectionId: 'local', profile: 'workbot' }
+      catalogName: 'weather',
+      profile: { connectionId: 'local', profile: 'workbot' }
     })
     expect($notifications.get()).toEqual([])
   })
@@ -155,10 +160,13 @@ describe('openCatalogPluginInstall', () => {
   it('says already installed when the selected owner snapshot has the plugin', () => {
     $agentPluginsByOwner.set({ [pluginInventoryKey('remote-1', 'workbot')]: [weather] })
 
-    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
-      connectionId: 'remote-1',
-      profile: 'workbot'
-    })
+    openCatalogPluginInstall(
+      { name: 'weather', repo: 'https://github.com/x/weather' },
+      {
+        connectionId: 'remote-1',
+        profile: 'workbot'
+      }
+    )
 
     expect($pluginInstallRequest.get()).toBeNull()
     expect($notifications.get()[0]).toMatchObject({ kind: 'success' })
@@ -183,10 +191,13 @@ describe('openCatalogPluginInstall', () => {
   it('still opens the dialog when the installed copy has an update', () => {
     $agentPluginsByOwner.set({ [pluginInventoryKey('remote-1', 'workbot')]: [{ ...weather, update_available: true }] })
 
-    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
-      connectionId: 'remote-1',
-      profile: 'workbot'
-    })
+    openCatalogPluginInstall(
+      { name: 'weather', repo: 'https://github.com/x/weather' },
+      {
+        connectionId: 'remote-1',
+        profile: 'workbot'
+      }
+    )
 
     expect($pluginInstallRequest.get()).toMatchObject({ catalogName: 'weather' })
     $agentPluginsByOwner.set({})

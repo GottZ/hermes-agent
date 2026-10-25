@@ -61,8 +61,10 @@ describe('loadAgentPlugins connection ownership', () => {
     $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [original] })
     const list = loadAgentPlugins(vi.fn(() => new Promise(resolve => { finish = resolve })) as never, 'workbot', 'local')
     const updated = row({ key: 'weather', status: 'enabled' })
+
     const ok = await toggleAgentPlugin(vi.fn(async () => ({ ok: true, plugin: updated })) as never,
       'weather', true, 'failed', 'workbot', 'local')
+
     expect(ok).toBe(true)
     finish({ plugins: [original] })
     await list
@@ -73,9 +75,11 @@ describe('loadAgentPlugins connection ownership', () => {
   it('starts a fresh owner list after install while an older pre-install list is in flight', async () => {
     let finishOld!: (value: { plugins: AgentPluginRow[] }) => void
     const installed = row({ key: 'weather', catalog_name: 'weather' })
+
     const request = vi.fn(() => request.mock.calls.length === 1
       ? new Promise<{ plugins: AgentPluginRow[] }>(resolve => { finishOld = resolve })
       : Promise.resolve({ plugins: [installed] }))
+
     const stale = loadAgentPlugins(request as never, 'workbot', 'local')
     const fresh = loadAgentPlugins(request as never, 'workbot', 'local', { force: true })
     expect(request).toHaveBeenCalledTimes(2)
@@ -88,8 +92,10 @@ describe('loadAgentPlugins connection ownership', () => {
 
   it('retains owner A list failure even when owner B refreshes first', async () => {
     let failA!: (reason: Error) => void
+
     const a = loadAgentPlugins(vi.fn(() => new Promise((_resolve, reject) => { failA = reject })) as never,
       'workbot', 'cloud')
+
     await loadAgentPlugins(vi.fn(async () => ({ plugins: [] })) as never, 'workbot', 'local')
     failA(new Error('cloud is unreachable'))
     await a
@@ -100,6 +106,7 @@ describe('loadAgentPlugins connection ownership', () => {
   it('refreshes the same owner cache after update rather than stamping a shared null owner', async () => {
     const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
       params.action === 'update' ? { ok: true } : { plugins: [row({ key: 'weather', version: '2' })] })
+
     $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [row({ key: 'weather', version: '1' })] })
     const result = await updateAgentPlugin(request as never, 'weather', 'failed', 'workbot', {}, 'local')
     expect(result.kind).toBe('applied')

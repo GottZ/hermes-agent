@@ -7,9 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugin } from '@/contrib/plugins-store'
 import { queryClient } from '@/lib/query-client'
 import {
-  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsErrorByOwner,
+  $agentPlugins,
+  $agentPluginsByOwner,
+  $agentPluginsConnectionId,
+  $agentPluginsErrorByOwner,
   $agentPluginsLoadingByOwner,
-  $agentPluginsProfile, $agentPluginsStatus, loadAgentPlugins
+  $agentPluginsProfile,
+  $agentPluginsStatus,
+  loadAgentPlugins
 } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $notifications } from '@/store/notifications'
@@ -25,9 +30,16 @@ import { PluginsTab } from './plugins-tab'
 const requestGateway = vi.fn(async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => ({
   plugins: $agentPlugins.get()
 }))
+
 const { routedRequest } = vi.hoisted(() => ({
-  routedRequest: vi.fn(async (_connection: null | string, _profile: string, _method: string,
-    _params?: Record<string, unknown>): Promise<unknown> => ({ plugins: [] }))
+  routedRequest: vi.fn(
+    async (
+      _connection: null | string,
+      _profile: string,
+      _method: string,
+      _params?: Record<string, unknown>
+    ): Promise<unknown> => ({ plugins: [] })
+  )
 }))
 
 vi.mock('@/store/gateway', async original => ({
@@ -249,16 +261,28 @@ describe('PluginsTab', () => {
   it.each([
     ['cloud', 'local', 'unavailable (remote backend)'],
     ['local', 'remote', 'copying…']
-  ])('locates a missing desktop half on selected %s rather than foreground %s', async (connectionId, foreground, expected) => {
-    $connection.set({ ...connectionFixture, mode: foreground as 'local' | 'remote' })
-    routedRequest.mockResolvedValue({ plugins: [{
-      description: '', has_desktop_half: true, key: 'nous-prices', name: 'nous-prices',
-      source: 'catalog', status: 'enabled', version: '1'
-    }] })
-    renderPlugins({ profile: { connectionId, profile: 'workbot' } })
-    const detail = within(await screen.findByRole('row', { name: /^nous-prices/ }))
-    expect(detail.getByText(expected)).toBeTruthy()
-  })
+  ])(
+    'locates a missing desktop half on selected %s rather than foreground %s',
+    async (connectionId, foreground, expected) => {
+      $connection.set({ ...connectionFixture, mode: foreground as 'local' | 'remote' })
+      routedRequest.mockResolvedValue({
+        plugins: [
+          {
+            description: '',
+            has_desktop_half: true,
+            key: 'nous-prices',
+            name: 'nous-prices',
+            source: 'catalog',
+            status: 'enabled',
+            version: '1'
+          }
+        ]
+      })
+      renderPlugins({ profile: { connectionId, profile: 'workbot' } })
+      const detail = within(await screen.findByRole('row', { name: /^nous-prices/ }))
+      expect(detail.getByText(expected)).toBeTruthy()
+    }
+  )
 
   it('keeps the pending desktop-half state on a local backend', () => {
     $agentPlugins.set([
@@ -381,7 +405,11 @@ describe('PluginsTab', () => {
     const owner = { connectionId: 'local', profile: 'workbot' }
     renderPlugins({ profile: owner })
     await selectCatalogEntry(weatherEntry.name)
-    await waitFor(() => expect((screen.getByRole('button', { name: `Install ${weatherEntry.name}` }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: `Install ${weatherEntry.name}` }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
     fireEvent.click(screen.getByRole('button', { name: `Install ${weatherEntry.name}` }))
     expect($pluginInstallRequest.get()?.profile).toEqual(owner)
 
@@ -392,14 +420,27 @@ describe('PluginsTab', () => {
 
   it('does not use another backend inventory to suppress a selected owner install', async () => {
     seedCatalog()
-    $agentPlugins.set([{ name: weatherEntry.name, catalog_name: weatherEntry.name,
-      description: '', source: 'git', status: 'enabled', version: '1' }])
+    $agentPlugins.set([
+      {
+        name: weatherEntry.name,
+        catalog_name: weatherEntry.name,
+        description: '',
+        source: 'git',
+        status: 'enabled',
+        version: '1'
+      }
+    ])
     renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
     await selectCatalogEntry(weatherEntry.name)
     const install = screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
     await waitFor(() => expect(install.disabled).toBe(false))
-    expect(routedRequest).toHaveBeenCalledWith('local', 'workbot', 'plugins.manage',
-      expect.objectContaining({ action: 'list', profile: 'workbot' }), undefined)
+    expect(routedRequest).toHaveBeenCalledWith(
+      'local',
+      'workbot',
+      'plugins.manage',
+      expect.objectContaining({ action: 'list', profile: 'workbot' }),
+      undefined
+    )
     expect(requestGateway.mock.calls.some(([, params]) => params?.action === 'list')).toBe(false)
     fireEvent.click(install)
     expect($pluginInstallRequest.get()?.profile).toEqual({ connectionId: 'local', profile: 'workbot' })
@@ -407,18 +448,24 @@ describe('PluginsTab', () => {
 
   it('offers catalog Install for an agent half missing on the selected owner despite a desktop half', async () => {
     seedCatalog()
-    $pluginRecords.set({ weather: {
-      id: 'weather', name: weatherEntry.name, kind: 'disk', status: 'loaded',
-      packageName: weatherEntry.name,
-      packageOrigin: { catalogName: weatherEntry.name, repo: weatherEntry.repo, sha: weatherEntry.sha }
-    } })
+    $pluginRecords.set({
+      weather: {
+        id: 'weather',
+        name: weatherEntry.name,
+        kind: 'disk',
+        status: 'loaded',
+        packageName: weatherEntry.name,
+        packageOrigin: { catalogName: weatherEntry.name, repo: weatherEntry.repo, sha: weatherEntry.sha }
+      }
+    })
     renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
     await selectCatalogEntry(weatherEntry.name)
     const install = await screen.findByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
     await waitFor(() => expect(install.disabled).toBe(false))
     fireEvent.click(install)
     expect($pluginInstallRequest.get()).toMatchObject({
-      catalogName: weatherEntry.name, legacyHint: 'agent',
+      catalogName: weatherEntry.name,
+      legacyHint: 'agent',
       profile: { connectionId: 'local', profile: 'workbot' }
     })
   })
@@ -429,7 +476,7 @@ describe('PluginsTab', () => {
     renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
     await selectCatalogEntry(weatherEntry.name)
     await screen.findByText('owner list unavailable')
-    expect((screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` }).disabled).toBe(true)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 
@@ -441,11 +488,19 @@ describe('PluginsTab', () => {
     await waitFor(() => expect(install.disabled).toBe(false))
 
     let finish!: (value: { plugins: unknown[] }) => void
-    routedRequest.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    routedRequest.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = resolve
+        })
+    )
     let pending!: Promise<void>
     act(() => {
-      pending = loadAgentPlugins((method, params) =>
-        routedRequest('local', 'workbot', method, params) as never, 'workbot', 'local')
+      pending = loadAgentPlugins(
+        (method, params) => routedRequest('local', 'workbot', method, params) as never,
+        'workbot',
+        'local'
+      )
     })
     expect(install.disabled).toBe(true)
     await act(async () => {
@@ -461,8 +516,16 @@ describe('PluginsTab', () => {
     await selectCatalogEntry(weatherEntry.name)
     const install = screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
     await waitFor(() => expect(install.disabled).toBe(false))
-    $agentPlugins.set([{ name: weatherEntry.name, catalog_name: weatherEntry.name,
-      description: '', source: 'git', status: 'enabled', version: '1' }])
+    $agentPlugins.set([
+      {
+        name: weatherEntry.name,
+        catalog_name: weatherEntry.name,
+        description: '',
+        source: 'git',
+        status: 'enabled',
+        version: '1'
+      }
+    ])
     $agentPluginsProfile.set('workbot')
     $agentPluginsConnectionId.set('cloud')
     await waitFor(() => expect(install.disabled).toBe(false))
@@ -470,8 +533,18 @@ describe('PluginsTab', () => {
 
   it('disables Install when the selected backend itself reports the catalog entry installed', async () => {
     seedCatalog()
-    routedRequest.mockResolvedValue({ plugins: [{ name: weatherEntry.name, catalog_name: weatherEntry.name,
-      description: '', source: 'git', status: 'enabled', version: '1' }] })
+    routedRequest.mockResolvedValue({
+      plugins: [
+        {
+          name: weatherEntry.name,
+          catalog_name: weatherEntry.name,
+          description: '',
+          source: 'git',
+          status: 'enabled',
+          version: '1'
+        }
+      ]
+    })
     renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
     await selectCatalogEntry(weatherEntry.name)
     await waitFor(() => expect($agentPluginsConnectionId.get()).toBe('local'))

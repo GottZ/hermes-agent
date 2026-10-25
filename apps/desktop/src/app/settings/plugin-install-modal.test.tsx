@@ -247,7 +247,9 @@ describe('A reviewed catalog pick', () => {
     expect(await screen.findByText("Checking the plugin's requirements on the backend…")).toBeTruthy()
     expect(installButton().disabled).toBe(true)
     await act(async () => {
-      check.resolve({ presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }] })
+      check.resolve({
+        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }]
+      })
       await check.promise
     })
     await waitFor(() => expect(installButton().disabled).toBe(false))

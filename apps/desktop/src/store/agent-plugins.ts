@@ -154,11 +154,13 @@ const ownerGenerations = new Map<string, number>()
 /** Invalidate a pre-mutation list without invalidating another owner's cache. */
 function invalidateListForMutation(profile: string | null | undefined, connectionId: string | null) {
   const scope = profile ?? null
+
   if (connectionId) {
     const key = pluginInventoryKey(connectionId, scope)
     ownerGenerations.delete(key)
     $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [key]: false })
   }
+
   if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
     ++loadGeneration
     inflight = null
@@ -192,6 +194,7 @@ export function loadAgentPlugins(
 
   const generation = ++loadGeneration
   const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
+
   if (ownerKey) {
     ownerGenerations.set(ownerKey, generation)
     $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
@@ -212,13 +215,16 @@ export function loadAgentPlugins(
       )
 
       const rows = (result?.plugins ?? []).map(normalizeAgentPluginRow)
+
       if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
         return
       }
+
       if (ownerKey) {
         $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: rows })
         $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
       }
+
       if (generation !== loadGeneration) {
         return
       }
@@ -232,10 +238,14 @@ export function loadAgentPlugins(
       if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
         return
       }
+
       if (ownerKey) {
-        $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(),
-          [ownerKey]: e instanceof Error ? e.message : String(e) })
+        $agentPluginsErrorByOwner.set({
+          ...$agentPluginsErrorByOwner.get(),
+          [ownerKey]: e instanceof Error ? e.message : String(e)
+        })
       }
+
       if (generation !== loadGeneration) {
         return
       }
@@ -246,6 +256,7 @@ export function loadAgentPlugins(
       if (ownerKey && ownerGenerations.get(ownerKey) === generation) {
         $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [ownerKey]: false })
       }
+
       if (generation === loadGeneration) {
         inflight = null
         inflightProfile = null
@@ -302,12 +313,16 @@ export async function toggleAgentPlugin(
         $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
         $agentPluginsStatus.set('ready')
       }
+
       if (connectionId) {
         const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
         const owned = $agentPluginsByOwner.get()[ownerKey]
+
         if (owned) {
-          $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(),
-            [ownerKey]: owned.map(row => row.key === key ? { ...row, ...snapshot } : row) })
+          $agentPluginsByOwner.set({
+            ...$agentPluginsByOwner.get(),
+            [ownerKey]: owned.map(row => (row.key === key ? { ...row, ...snapshot } : row))
+          })
         }
       }
     } else {
@@ -555,12 +570,13 @@ export async function removeAgentPlugin(
     if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
       $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
     }
+
     if (connectionId) {
       const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
       const owned = $agentPluginsByOwner.get()[ownerKey]
+
       if (owned) {
-        $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(),
-          [ownerKey]: owned.filter(row => row.name !== name) })
+        $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: owned.filter(row => row.name !== name) })
       }
     }
 

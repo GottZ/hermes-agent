@@ -10,6 +10,7 @@ export function pluginOwnerRequest(scope: ProfileScope, ambient: GatewayRequest)
   }
 
   const connectionId = scope.connectionId.trim()
+
   return <T>(method: string, params?: Record<string, unknown>, timeoutMs?: number) =>
     requestGatewayForAgent<T>(
       connectionId,
