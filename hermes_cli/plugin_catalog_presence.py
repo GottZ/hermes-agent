@@ -44,10 +44,15 @@ UNKNOWN = Presence("unknown")
 # that declares an app or GPU. Distinct from UNKNOWN, which means the declaration could not be judged.
 NO_REQUIREMENTS = Presence("unknown", reason="no_requirements")
 
-def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None):
-    """Only a catalog pin with the exact reviewed server app declaration may name a vendor."""
+def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None, *,
+                  catalog: list | None = None):
+    """Only a catalog pin with the exact reviewed server app declaration may name a vendor.
+
+    *catalog* is the caller's already-loaded live catalog; each load re-parses every in-tree entry."""
+    if not getattr(entry, "app_download_url", None):
+        return None  # the match below needs a reviewed URL on both sides
     from hermes_cli.plugin_catalog import load_catalog_live
-    reviewed = next((item for item in load_catalog_live()
+    reviewed = next((item for item in (load_catalog_live() if catalog is None else catalog)
                      if item.name == entry.name and item.repo == entry.repo
                      and item.sha == getattr(entry, "sha", None)
                      and item.subdir == getattr(entry, "subdir", None)
@@ -74,9 +79,9 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
                  found_version: str | None = None, server_name: str | None = None,
-                 actual_declaration: Any = None) -> dict[str, str | None]:
+                 actual_declaration: Any = None, catalog: list | None = None) -> dict[str, str | None]:
     """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin."""
-    reviewed = _reviewed_app(entry, server_name, actual_declaration)
+    reviewed = _reviewed_app(entry, server_name, actual_declaration, catalog=catalog)
     return {"reason": reason, "app_title": reviewed.title if reviewed else entry.name,
             "required_version": required_version, "found_version": found_version,
             "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
@@ -158,7 +163,7 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
         "app_not_running", f"{title} is not running", "app_not_running", available.min_version)
 
 
-def presence(entry: Any) -> Presence:
+def presence(entry: Any, *, catalog: list | None = None) -> Presence:
     """The app state of one catalog entry on this host. The worst server wins (missing, then not running)."""
     from hermes_cli.agent_plugins import _server_declarations
     from hermes_cli.plugins_cmd_catalog import normalized_platforms
@@ -185,7 +190,7 @@ def presence(entry: Any) -> Presence:
     except Exception as exc:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
-    reviewed = _reviewed_app(entry, entry.app_server) if getattr(entry, "app_server", None) else None
+    reviewed = _reviewed_app(entry, entry.app_server, catalog=catalog) if getattr(entry, "app_server", None) else None
     try:
         found = [replace(_server_presence(d.declaration, d.liveness,
                                           reviewed.title if reviewed and name == reviewed.app_server else entry.name),
@@ -202,14 +207,14 @@ def presence(entry: Any) -> Presence:
     return min(relevant, key=lambda p: rank[p.reason]) if relevant else NO_REQUIREMENTS
 
 
-def _onboarding_catalog() -> list:
+def _onboarding_catalog(catalog: list | None = None) -> list:
     """Catalog entries curated for onboarding (``onboarding: true``) that this OS can run."""
     from hermes_cli.plugin_catalog import load_catalog_live
     from hermes_cli.plugins_cmd_catalog import normalized_platforms
     from hermes_platform.host.facts import os_family
 
     here = os_family()
-    return [entry for entry in load_catalog_live()
+    return [entry for entry in (load_catalog_live() if catalog is None else catalog)
             if entry.onboarding and (not entry.platforms or here in normalized_platforms(entry.platforms))]
 
 
@@ -221,9 +226,12 @@ def onboarding_names() -> list[str]:
 def onboarding_entries() -> list[dict[str, Any]]:
     """Catalog entries curated for the onboarding card (``onboarding: true``) that this OS can run,
     each with its app state. Platform mismatch is the only exclusion; a missing app is reported."""
+    from hermes_cli.plugin_catalog import load_catalog_live
+
+    catalog = load_catalog_live()
     rows = []
-    for entry in _onboarding_catalog():
-        found = presence(entry)
+    for entry in _onboarding_catalog(catalog):
+        found = presence(entry, catalog=catalog)
         rows.append({
             "name": entry.name,
             "title": entry.title or entry.name,
@@ -233,7 +241,7 @@ def onboarding_entries() -> list[dict[str, Any]]:
             "app_state": found.state,
             "sentence": found.sentence,
             **app_guidance(entry, found.reason, required_version=found.required_version,
-                           found_version=found.found_version, server_name=found.server_name),
+                           found_version=found.found_version, server_name=found.server_name, catalog=catalog),
         })
     return rows
 
@@ -244,18 +252,19 @@ def presence_for(names: list[str]) -> list[dict[str, Any]]:
     from concurrent.futures import ThreadPoolExecutor
 
     from hermes_cli.plugin_catalog import load_catalog_live
-    by_name = {entry.name: entry for entry in load_catalog_live()}
+    catalog = load_catalog_live()  # once per request: every guidance row below reuses it
+    by_name = {entry.name: entry for entry in catalog}
     # An explicit named request must report unsupported_os rather than silently hiding the row.
     entries = [by_name[name] for name in dict.fromkeys(names) if name in by_name]
     if not entries:
         return []
     # Each manifest read is bounded by _TIMEOUT; in parallel the whole answer waits one timeout, not one per name.
     with ThreadPoolExecutor(max_workers=len(entries)) as pool:
-        found = list(pool.map(presence, entries))
+        found = list(pool.map(lambda entry: presence(entry, catalog=catalog), entries))
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
              "sentence": state.sentence, "disclosure": _disclosure(entry.description),
              **app_guidance(entry, state.reason, required_version=state.required_version,
-                            found_version=state.found_version, server_name=state.server_name)}
+                            found_version=state.found_version, server_name=state.server_name, catalog=catalog)}
             for entry, state in zip(entries, found)]
 
 

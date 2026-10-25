@@ -309,6 +309,20 @@ def test_pin_without_plugin_json_has_no_requirements_but_a_failed_read_stays_unc
     assert rows["offline"]["reason"] == "uncertain"
 
 
+def test_named_presence_reads_the_live_catalog_once_per_request(monkeypatch):
+    """Each live-catalog load re-parses every in-tree entry (1.2 s on a Windows backend)."""
+    from hermes_cli import plugin_catalog as catalog
+
+    reviewed = [e for e in catalog.load_catalog() if e.name in ("nvidia-app", "nvidia-broadcast")]
+    entries = [*reviewed, _github_entry("plain")]
+    loads = []
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: loads.append(1) or entries)
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda repo, sha, subdir: _manifest_for(subdir or "srv"))
+    rows = presence.presence_for(["nvidia-app", "nvidia-broadcast", "plain"])
+    assert [row["name"] for row in rows] == ["nvidia-app", "nvidia-broadcast", "plain"]
+    assert len(loads) == 1
+
+
 def test_unreadable_installed_version_is_typed_non_looping_refusal(monkeypatch, tmp_path):
     from hermes_platform.resolver import availability as availability_mod
     from hermes_cli import agent_plugins
