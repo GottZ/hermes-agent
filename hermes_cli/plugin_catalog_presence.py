@@ -39,24 +39,37 @@ class Presence:
 
 UNKNOWN = Presence("unknown")
 
-# Vendor links are host-owned, never accepted from an untrusted plugin manifest.
-_OFFICIAL_DOWNLOADS = {
-    ("nvidia-app", "https://github.com/NousResearch/hermes-nvidia"):
-        ("NVIDIA App", "https://www.nvidia.com/en-us/software/nvidia-app/"),
-    ("nvidia-broadcast", "https://github.com/NousResearch/hermes-nvidia"):
-        ("NVIDIA Broadcast", "https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/"),
-    ("game-editor", "https://github.com/TakeshiTGAL/hermes-plugin-game-editor"):
-        ("Godot 4", "https://godotengine.org/download/macos/"),
-}
+def _reviewed_app(entry: Any):
+    """Only a catalog pin with the exact reviewed server app declaration may name a vendor."""
+    from hermes_cli.plugin_catalog import load_catalog_live
+    reviewed = next((item for item in load_catalog_live()
+                     if item.name == entry.name and item.repo == entry.repo
+                     and item.sha == getattr(entry, "sha", None)
+                     and item.subdir == getattr(entry, "subdir", None)
+                     and item.title == getattr(entry, "title", None)
+                     and item.app_download_url == getattr(entry, "app_download_url", None)
+                     and item.app_server == getattr(entry, "app_server", None)
+                     and item.app_download_url), None)
+    if reviewed is None:
+        return None
+    manifest = _pinned_manifest(reviewed.repo, reviewed.sha, reviewed.subdir)
+    try:
+        from hermes_cli.agent_plugins import _server_declarations
+        servers = (manifest or {}).get("extensions", {}).get("com.nousresearch.hermes", {}).get("servers", {})
+        declarations = _server_declarations(manifest, {name: {} for name in servers}) if manifest and isinstance(servers, dict) else {}
+        server = declarations.get(reviewed.app_server)
+        return reviewed if server and server.declaration.requires_app and server.declaration.app is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
                  found_version: str | None = None) -> dict[str, str | None]:
-    """Backend-host guidance; links only for an identified vendor's app/version blocker."""
-    curated = _OFFICIAL_DOWNLOADS.get((entry.name, entry.repo))
-    return {"reason": reason, "app_title": curated[0] if curated else (entry.title or entry.name),
+    """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin."""
+    reviewed = _reviewed_app(entry)
+    return {"reason": reason, "app_title": reviewed.title if reviewed else entry.name,
             "required_version": required_version, "found_version": found_version,
-            "download_url": curated[1] if curated and reason in ("missing_app", "version_too_old") else None,
+            "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
             "target_host": "backend"}
 
 
@@ -105,7 +118,7 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
         logger.debug("plugin catalog presence: app discovery failed", exc_info=True)
         return UNKNOWN
     if available.state == "no_requirements":
-        return UNKNOWN
+        return Presence("unknown", reason="no_requirements")
     if available.state in ("missing_app", "unsupported_os"):
         return Presence("missing_app", f"needs {title}", available.state, available.min_version)
     if available.state == "unsupported_gpu":
@@ -148,7 +161,8 @@ def presence(entry: Any) -> Presence:
     except Exception as exc:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
-    title = _OFFICIAL_DOWNLOADS.get((entry.name, entry.repo), (entry.title or entry.name, ""))[0]
+    reviewed = _reviewed_app(entry)
+    title = reviewed.title if reviewed else entry.name
     try:
         found = [_server_presence(d.declaration, d.liveness, title) for d in declarations.values()]
     except Exception:
@@ -157,8 +171,10 @@ def presence(entry: Any) -> Presence:
     # In an all-of plugin, an unsupported or uncertain server must not be masked by an
     # actionable missing-app sibling (which would misleadingly invite an install).
     rank = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2,
-            "missing_app": 3, "version_too_old": 4, "app_not_running": 5, "available": 6}
-    return min(found, key=lambda p: rank[p.reason]) if found else UNKNOWN
+            "missing_app": 3, "version_too_old": 4, "app_not_running": 5,
+            "no_requirements": 6, "available": 7}
+    result = min(found, key=lambda p: rank[p.reason]) if found else UNKNOWN
+    return UNKNOWN if result.reason == "no_requirements" else result
 
 
 def _onboarding_catalog() -> list:

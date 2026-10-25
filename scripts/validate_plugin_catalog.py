@@ -74,6 +74,8 @@ KNOWN_KEYS = {
     "platforms",
     "capabilities",
     "title",
+    "app_download_url",
+    "app_server",
     "onboarding",
     "known_issues",
     "attested_binaries",
@@ -140,6 +142,32 @@ def _check_requires_hermes(spec: object, errors: list[str]) -> None:
             )
 
 
+def _check_app_download_url(data: dict, errors: list[str]) -> None:
+    if "app_download_url" not in data:
+        return
+    import ipaddress
+
+    url = data["app_download_url"]
+    valid = False
+    if isinstance(url, str) and not any(c.isspace() or ord(c) < 32 for c in url):
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname or ""
+            valid = (parts.scheme == "https" and bool(re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host))
+                     and parts.username is None and parts.password is None and parts.port is None
+                     and not parts.fragment)
+            try:
+                ipaddress.ip_address(host)
+                valid = False
+            except ValueError:
+                pass
+        except ValueError:
+            valid = False
+    if (not valid or not isinstance(data.get("title"), str) or not data["title"].strip()
+            or not isinstance(data.get("app_server"), str) or not data["app_server"].strip()):
+        errors.append("app_download_url requires a title, app_server, and direct HTTPS vendor hostname")
+
+
 def validate_entry(data: object) -> tuple[list[str], list[str]]:
     """Validate one catalog entry document. Returns (errors, warnings)."""
     errors: list[str] = []
@@ -201,6 +229,7 @@ def validate_entry(data: object) -> tuple[list[str], list[str]]:
         _check_requires_hermes(data["requires_hermes"], errors)
 
     version = data.get("version")
+    _check_app_download_url(data, errors)
     if version is not None and (not isinstance(version, str) or not VERSION_RE.match(version)):
         errors.append(f"version {version!r} must be 1-32 chars of [A-Za-z0-9._+-] (quote it in YAML)")
 

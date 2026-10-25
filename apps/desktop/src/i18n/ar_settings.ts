@@ -212,6 +212,8 @@ export const arSettings = {
           missing: (name: string) => `${name} غير مثبّت. ثبّته أولاً على جهاز الواجهة الخلفية قبل تثبيت هذه الإضافة.`,
           oldVersion: (name: string, required: string, found: string) =>
             `يلزم ${name} بإصدار ${required} أو أحدث (الموجود: ${found || 'إصدار أقدم'}). حدّثه على جهاز الواجهة الخلفية.`,
+          unreadableVersion: (name: string, required: string) =>
+            `تعذّر تحديد الإصدار المثبّت من ${name}. يلزم الإصدار ${required} أو أحدث؛ تحقّق من الإصدار على جهاز الواجهة الخلفية قبل إعادة المحاولة.`,
           unsupportedOs: (name: string) => `${name} غير مدعوم على نظام تشغيل الواجهة الخلفية.`,
           unsupportedGpu: (name: string) => `معالج الرسوميات في الواجهة الخلفية غير مدعوم لـ ${name}.`,
           uncertain: (name: string) => `تعذّر التحقق من توفر ${name}. يمكنك محاولة تثبيت الإضافة.`,

@@ -783,6 +783,8 @@ export const en: Translations = {
             `${name} is not installed. Install it on the backend computer before installing this plugin.`,
           oldVersion: (name: string, required: string, found: string) =>
             `${name} ${required} or newer is needed (found ${found || 'an older version'}). Update it on the backend computer.`,
+          unreadableVersion: (name: string, required: string) =>
+            `Could not determine ${name}'s installed version. Version ${required} or newer is required; check its version on the backend computer before retrying.`,
           unsupportedOs: (name: string) => `${name} is not supported on the backend operating system.`,
           unsupportedGpu: (name: string) => `The backend GPU is not supported for ${name}.`,
           uncertain: (name: string) =>

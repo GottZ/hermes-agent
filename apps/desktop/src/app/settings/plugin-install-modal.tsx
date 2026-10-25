@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/react'
 import { Puzzle } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
@@ -22,7 +22,8 @@ import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle, Loader2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
-import { COMMIT_SHA_RE } from '@/store/agent-plugins'
+import { COMMIT_SHA_RE, type GatewayRequest } from '@/store/agent-plugins'
+import { registryConnectionKind } from '@/store/connection-registry-state'
 import { activeGatewayConnectionId } from '@/store/gateway'
 import {
   type AppGuidance,
@@ -50,7 +51,13 @@ import {
 import { $connection } from '@/store/session'
 
 import { PluginInstallDetails } from './plugin-install-details'
-import { type InstallModalCopy, type ProbeResult, runPluginInstall } from './plugin-install-run'
+import {
+  type InstallModalCopy,
+  type InstallOutcome,
+  installRequestGateway,
+  type ProbeResult,
+  runPluginInstall
+} from './plugin-install-run'
 import { usePluginProbe } from './use-plugin-probe'
 
 const CAPTION = 'text-[length:var(--conversation-caption-font-size)]'
@@ -324,7 +331,10 @@ function AppGuidancePanel({
       copy.oldVersion(guidance.app_title, guidance.required_version ?? '', guidance.found_version ?? ''),
     unsupported_os: () => copy.unsupportedOs(guidance.app_title),
     unsupported_gpu: () => copy.unsupportedGpu(guidance.app_title),
-    uncertain: () => copy.uncertain(guidance.app_title),
+    uncertain: () =>
+      guidance.required_version && !guidance.found_version
+        ? copy.unreadableVersion(guidance.app_title, guidance.required_version)
+        : copy.uncertain(guidance.app_title),
     app_not_running: () => copy.notRunning(guidance.app_title),
     available: () => ''
   }[guidance.reason]()
@@ -367,12 +377,138 @@ interface InstallViewProps {
   onInstallingChange: (installing: boolean) => void
 }
 
+function routePluginHelpChat(request: PluginInstallRequest, targetProfile: string, activeProfile: string) {
+  const connectionId =
+    request.profile && typeof request.profile === 'object'
+      ? request.profile.connectionId?.trim() || activeGatewayConnectionId()
+      : activeGatewayConnectionId()
+
+  if (connectionId) {
+    newSessionInAgent({ connectionId, profile: targetProfile })
+  } else {
+    const alreadyActive = normalizeProfileKey(activeProfile) === targetProfile
+    selectProfile(targetProfile)
+
+    if (alreadyActive) {
+      requestFreshSession()
+    }
+  }
+}
+
+function useCatalogAppCheck(requestGateway: GatewayRequest, catalogName: string | undefined, targetProfile: string) {
+  const [guidance, setGuidance] = useState<AppGuidance | null>(null)
+  const [checkingApp, setCheckingApp] = useState(Boolean(catalogName))
+  const checkIntent = useRef(0)
+
+  useEffect(() => {
+    if (!catalogName) {
+      return
+    }
+
+    const intent = ++checkIntent.current
+    setGuidance(null)
+    setCheckingApp(true)
+    void presenceForCatalogPlugin(requestGateway, catalogName, targetProfile).then(found => {
+      if (checkIntent.current === intent) {
+        setGuidance(found)
+        setCheckingApp(false)
+      }
+    })
+
+    const intentRef = checkIntent
+
+    return () => {
+      intentRef.current++
+    }
+  }, [catalogName, requestGateway, targetProfile])
+
+  const recheckApp = async (): Promise<AppGuidance | null> => {
+    if (!catalogName) {
+      return null
+    }
+
+    const intent = ++checkIntent.current
+    setCheckingApp(true)
+
+    try {
+      const found = await presenceForCatalogPlugin(requestGateway, catalogName, targetProfile)
+
+      if (checkIntent.current === intent) {
+        setGuidance(found)
+      }
+
+      return found
+    } finally {
+      if (checkIntent.current === intent) {
+        setCheckingApp(false)
+      }
+    }
+  }
+
+  return {
+    guidance,
+    setGuidance,
+    checkingApp,
+    recheckApp,
+    invalidate: () => {
+      checkIntent.current++
+    }
+  }
+}
+
+function applyInstallOutcome(
+  outcome: InstallOutcome,
+  request: PluginInstallRequest,
+  navigate: (to: string) => void,
+  onUncertain: () => void,
+  onBlocked: (guidance: AppGuidance) => void,
+  onFailure: (error: string) => void
+) {
+  if (outcome.status === 'done') {
+    finishInstall(request, navigate)
+  } else if (outcome.status === 'uncertain') {
+    onUncertain()
+  } else if (outcome.status === 'app_blocked') {
+    onBlocked(outcome.guidance)
+  } else {
+    onFailure(outcome.error)
+  }
+}
+
+function canStartInstall(status: {
+  installing: boolean
+  checkingApp: boolean
+  guidance: AppGuidance | null
+  installUncertain: boolean
+  pinInvalid: boolean
+  verified: boolean
+  probe: ProbeResult | null
+}): boolean {
+  return (
+    !status.installing &&
+    !status.checkingApp &&
+    !isAppBlocked(status.guidance) &&
+    !status.installUncertain &&
+    !status.pinInvalid &&
+    (status.verified || Boolean(status.probe?.ok))
+  )
+}
+
 function InstallView({ request, installing, onInstallingChange }: InstallViewProps) {
   const { t } = useI18n()
   const m = t.settings.plugins.installModal
-  const { requestGateway } = useGatewayRequest()
+  const { requestGateway: ambientRequest } = useGatewayRequest()
+  const requestGateway = useMemo(() => installRequestGateway(request, ambientRequest), [request, ambientRequest])
   const navigate = useNavigate()
-  const remote = useStore($connection)?.mode === 'remote'
+  const ambientRemote = useStore($connection)?.mode === 'remote'
+
+  const pinnedConnection =
+    request.profile && typeof request.profile === 'object' ? request.profile.connectionId?.trim() : null
+
+  const remote = pinnedConnection
+    ? pinnedConnection !== 'local' && registryConnectionKind(pinnedConnection) !== 'local'
+    : ambientRemote
+
   const activeProfile = useStore($activeGatewayProfile)
   const profiles = useStore($profiles)
   const profileScope = useStore($profileScope)
@@ -381,7 +517,11 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   const { probe, start, cancel, settled } = usePluginProbe(m.probeUnavailable)
 
   const [targetProfile, setTargetProfile] = useState(() =>
-    normalizeProfileKey(request.profile || activeProfile || profileScope)
+    normalizeProfileKey(
+      request.profile && typeof request.profile === 'object'
+        ? request.profile.profile
+        : request.profile || activeProfile || profileScope
+    )
   )
 
   const [advancedOpen, setAdvancedOpen] = useState(!verified)
@@ -389,45 +529,12 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   const [pinRef, setPinRef] = useState('')
   const [installError, setInstallError] = useState<null | string>(null)
   const [installUncertain, setInstallUncertain] = useState(false)
-  const [guidance, setGuidance] = useState<AppGuidance | null>(null)
-  const [checkingApp, setCheckingApp] = useState(verified)
 
-  useEffect(() => {
-    if (!request.catalogName) {
-      return
-    }
-
-    let current = true
-    setGuidance(null)
-    setCheckingApp(true)
-    void presenceForCatalogPlugin(requestGateway, request.catalogName, targetProfile).then(found => {
-      if (current) {
-        setGuidance(found)
-        setCheckingApp(false)
-      }
-    })
-
-    return () => {
-      current = false
-    }
-  }, [request.catalogName, requestGateway, targetProfile])
-
-  const recheckApp = async (): Promise<AppGuidance | null> => {
-    if (!request.catalogName) {
-      return null
-    }
-
-    setCheckingApp(true)
-
-    try {
-      const found = await presenceForCatalogPlugin(requestGateway, request.catalogName, targetProfile)
-      setGuidance(found)
-
-      return found
-    } finally {
-      setCheckingApp(false)
-    }
-  }
+  const { guidance, setGuidance, checkingApp, recheckApp, invalidate } = useCatalogAppCheck(
+    requestGateway,
+    request.catalogName,
+    targetProfile
+  )
 
   const askForHelp = () => {
     if (!guidance) {
@@ -435,19 +542,7 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
     }
 
     queuePluginHelpDraft(m.appGuidance.helpDraft(guidance.app_title, targetProfile))
-    const connectionId = activeGatewayConnectionId()
-
-    if (connectionId) {
-      newSessionInAgent({ connectionId, profile: targetProfile })
-    } else {
-      const alreadyActive = normalizeProfileKey(activeProfile) === targetProfile
-      selectProfile(targetProfile)
-
-      if (alreadyActive) {
-        requestFreshSession()
-      }
-    }
-
+    routePluginHelpChat(request, targetProfile, activeProfile)
     closePluginInstallRequest()
     navigate(NEW_CHAT_ROUTE)
   }
@@ -490,15 +585,7 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
         { copy: m, navigate, requestGateway }
       )
 
-      if (outcome.status === 'done') {
-        finishInstall(request, navigate)
-      } else if (outcome.status === 'uncertain') {
-        setInstallUncertain(true)
-      } else if (outcome.status === 'app_blocked') {
-        setGuidance(outcome.guidance)
-      } else {
-        setInstallError(outcome.error)
-      }
+      applyInstallOutcome(outcome, request, navigate, () => setInstallUncertain(true), setGuidance, setInstallError)
     } finally {
       onInstallingChange(false)
     }
@@ -513,13 +600,15 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   }
 
   // An unverified repository installs only once its contents are on screen; a reviewed pick may start at once.
-  const canInstall =
-    !installing &&
-    !checkingApp &&
-    !isAppBlocked(guidance) &&
-    !installUncertain &&
-    !pinInvalid &&
-    (verified || Boolean(probe?.ok))
+  const canInstall = canStartInstall({
+    installing,
+    checkingApp,
+    guidance,
+    installUncertain,
+    pinInvalid,
+    verified,
+    probe
+  })
 
   return (
     <>
@@ -549,7 +638,10 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
               value: targetProfile,
               label: targetLabel,
               options: targetInfo ? profiles : [...profiles, { name: targetProfile }],
-              onChange: setTargetProfile
+              onChange: profile => {
+                invalidate()
+                setTargetProfile(profile)
+              }
             }}
             remote={remote}
             request={request}

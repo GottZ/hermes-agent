@@ -341,6 +341,19 @@ describe('PluginsTab', () => {
     )
   })
 
+  it('retains the exact registry owner on catalog and Git install doors', async () => {
+    seedCatalog()
+    const owner = { connectionId: 'local', profile: 'workbot' }
+    renderPlugins({ profile: owner })
+    await selectCatalogEntry(weatherEntry.name)
+    fireEvent.click(screen.getByRole('button', { name: `Install ${weatherEntry.name}` }))
+    expect($pluginInstallRequest.get()?.profile).toEqual(owner)
+
+    closePluginInstallRequest()
+    fireEvent.click(screen.getByRole('button', { name: 'Install from Git' }))
+    expect($pluginInstallRequest.get()?.profile).toEqual(owner)
+  })
+
   it.each([false, true])('opens the scoped native install dialog from the selected entry (cards=%s)', async cards => {
     $catalogCardView.set(cards)
     seedCatalog([

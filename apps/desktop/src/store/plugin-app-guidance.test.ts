@@ -1,7 +1,7 @@
 import { JsonRpcGatewayError } from '@hermes/shared'
 import { describe, expect, it, vi } from 'vitest'
 
-import { appGuidanceFromError, officialAppDownloadUrl, presenceForCatalogPlugin } from './plugin-app-guidance'
+import { appGuidanceFromError, isAppBlocked, officialAppDownloadUrl, presenceForCatalogPlugin } from './plugin-app-guidance'
 
 const missing = {
   reason: 'missing_app',
@@ -58,12 +58,25 @@ describe('catalog app preflight', () => {
     ).toBeNull()
   })
 
-  it('only offers exact allowlisted HTTPS vendor links for actionable blockers', () => {
+  it('offers safe HTTPS vendor links only for actionable blockers', () => {
     expect(officialAppDownloadUrl(missing)).toBe('https://godotengine.org/download/macos/')
     expect(
-      officialAppDownloadUrl({ ...missing, download_url: 'https://godotengine.org.evil.test/download/macos/' })
+      officialAppDownloadUrl({ ...missing, download_url: 'https://godotengine.org@evil.test/download/macos/' })
     ).toBeNull()
     expect(officialAppDownloadUrl({ ...missing, download_url: 'http://godotengine.org/download/macos/' })).toBeNull()
     expect(officialAppDownloadUrl({ ...missing, reason: 'unsupported_os' })).toBeNull()
+  })
+
+  it('allows a reviewed backend HTTPS vendor link without a core title map', () => {
+    expect(
+      officialAppDownloadUrl({ ...missing, app_title: 'Paint Studio', download_url: 'https://paint.example/download' })
+    ).toBe('https://paint.example/download')
+    expect(officialAppDownloadUrl({ ...missing, download_url: 'https://user@evil.example/download' })).toBeNull()
+    expect(officialAppDownloadUrl({ ...missing, download_url: 'https://127.0.0.1/download' })).toBeNull()
+  })
+
+  it('holds an unreadable required app version without an install retry loop', () => {
+    expect(isAppBlocked({ ...missing, reason: 'uncertain', required_version: '11.0', found_version: null })).toBe(true)
+    expect(isAppBlocked({ ...missing, reason: 'uncertain', required_version: null })).toBe(false)
   })
 })

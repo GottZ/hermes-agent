@@ -91,26 +91,44 @@ export function appGuidanceFromError(error: unknown): AppGuidance | null {
   return error instanceof JsonRpcGatewayError && error.code === 5026 ? parseAppGuidance(error.data) : null
 }
 
-const VENDOR_URLS = new Map([
-  ['NVIDIA App', 'https://www.nvidia.com/en-us/software/nvidia-app/'],
-  ['NVIDIA Broadcast', 'https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/'],
-  ['Godot 4', 'https://godotengine.org/download/macos/']
-])
-
-/** Vendor-controlled, HTTPS, exact URLs only — never trust plugin docs_url or a supplied hostname. */
+/** Only backend-vetted catalog metadata reaches this field, not a plugin's docs_url or manifest URL. */
 export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
-  if (guidance.target_host !== 'backend' || !['missing_app', 'version_too_old'].includes(guidance.reason)) {
+  const value = guidance.download_url
+
+  if (
+    guidance.target_host !== 'backend' ||
+    !['missing_app', 'version_too_old'].includes(guidance.reason) ||
+    !value ||
+    Array.from(value).some(char => /\s/.test(char) || char.charCodeAt(0) < 32)
+  ) {
     return null
   }
 
-  const allowed = VENDOR_URLS.get(guidance.app_title)
+  try {
+    const url = new URL(value)
 
-  return guidance.download_url === allowed && allowed?.startsWith('https://') ? allowed : null
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.hash ||
+      !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(url.hostname) ||
+      /^\d+(?:\.\d+){3}$/.test(url.hostname)
+    ) {
+      return null
+    }
+
+    return value
+  } catch {
+    return null
+  }
 }
 
 export function isAppBlocked(guidance: AppGuidance | null): boolean {
   return (
     guidance !== null &&
-    ['missing_app', 'version_too_old', 'unsupported_os', 'unsupported_gpu'].includes(guidance.reason)
+    (['missing_app', 'version_too_old', 'unsupported_os', 'unsupported_gpu'].includes(guidance.reason) ||
+      (guidance.reason === 'uncertain' && Boolean(guidance.required_version) && !guidance.found_version))
   )
 }

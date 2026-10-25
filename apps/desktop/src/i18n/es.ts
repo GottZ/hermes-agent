@@ -788,6 +788,8 @@ export const esOverrides = {
             `${name} no está instalado. Instálalo en el equipo del backend antes de instalar este plugin.`,
           oldVersion: (name, required, found) =>
             `Se necesita ${name} ${required} o posterior (detectado: ${found || 'versión anterior'}). Actualízalo en el backend.`,
+          unreadableVersion: (name, required) =>
+            `No se pudo determinar la versión instalada de ${name}. Se necesita la versión ${required} o posterior; compruébala en el backend antes de reintentarlo.`,
           unsupportedOs: name => `${name} no es compatible con el sistema operativo del backend.`,
           unsupportedGpu: name => `La GPU del backend no es compatible con ${name}.`,
           uncertain: name => `No se pudo confirmar si ${name} está disponible. Puedes intentar instalar el plugin.`,

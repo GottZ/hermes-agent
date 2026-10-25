@@ -74,6 +74,8 @@ export const zhHantSettings = {
           missing: name => `${name} 尚未安裝。請先在後端電腦安裝，再安裝此外掛。`,
           oldVersion: (name, required, found) =>
             `需要 ${name} ${required} 或更新版本（目前：${found || '舊版本'}）。請在後端電腦更新。`,
+          unreadableVersion: (name, required) =>
+            `無法讀取 ${name} 的已安裝版本。需要 ${required} 或更新版本；請先在後端電腦確認版本，再重試。`,
           unsupportedOs: name => `後端作業系統不支援 ${name}。`,
           unsupportedGpu: name => `後端 GPU 不支援 ${name}。`,
           uncertain: name => `無法確認 ${name} 是否可用。你可以嘗試安裝外掛。`,

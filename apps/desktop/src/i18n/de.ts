@@ -784,6 +784,8 @@ export const deOverrides = {
             `${name} ist nicht installiert. Installiere es auf dem Backend-Rechner, bevor du dieses Plugin installierst.`,
           oldVersion: (name, required, found) =>
             `${name} ${required} oder neuer ist nötig (gefunden: ${found || 'ältere Version'}). Aktualisiere es auf dem Backend-Rechner.`,
+          unreadableVersion: (name, required) =>
+            `Die installierte Version von ${name} konnte nicht ermittelt werden. Version ${required} oder neuer ist erforderlich; prüfe die Version auf dem Backend-Rechner, bevor du es erneut versuchst.`,
           unsupportedOs: name => `${name} wird auf dem Betriebssystem des Backends nicht unterstützt.`,
           unsupportedGpu: name => `Die GPU des Backends wird für ${name} nicht unterstützt.`,
           uncertain: name =>

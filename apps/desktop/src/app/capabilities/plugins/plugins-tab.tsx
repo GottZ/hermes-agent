@@ -102,7 +102,7 @@ async function rescanAll(requestGateway: GatewayRequest, scope: null | string) {
  *  half of a unified package into the scoped profile (the desktop half is
  *  already here). Provenance comes from the package marker Electron stamped
  *  when it copied the half out (catalog sidecar or git remote). */
-function installAgentHalfHere(record: PluginRecord, profile: null | string) {
+function installAgentHalfHere(record: PluginRecord, profile: ProfileScope) {
   const origin = record.packageOrigin
 
   if (!origin?.repo) {
@@ -145,7 +145,8 @@ const updateTargetLabel = (agent: AgentPluginRow) =>
   agent.catalog_version ?? agent.catalog_sha?.slice(0, 8) ?? shortTarget(agent.update_target)
 
 /** A full commit shortens to 8 characters; a feed version stays as it is. */
-const shortTarget = (target?: string) => (target && /^[0-9a-f]{40}$/i.test(target) ? target.slice(0, 8) : (target ?? ''))
+const shortTarget = (target?: string) =>
+  target && /^[0-9a-f]{40}$/i.test(target) ? target.slice(0, 8) : (target ?? '')
 
 function KindBadge({ kind }: { kind: PackageKind }) {
   const { t } = useI18n()
@@ -503,7 +504,7 @@ function PackageRow({
                 <Button
                   className="h-5 px-1.5 text-[0.65rem]"
                   disabled={!desktop.packageOrigin?.repo}
-                  onClick={() => installAgentHalfHere(desktop, scope)}
+                  onClick={() => installAgentHalfHere(desktop, profile)}
                   size="xs"
                   variant="outline"
                 >
@@ -548,7 +549,7 @@ export function PluginActions({ profile }: { profile: ProfileScope }) {
 
   return (
     <>
-      <Button onClick={() => openPluginInstallRequest({ profile: scope, repo: '' })} size="xs" variant="textStrong">
+      <Button onClick={() => openPluginInstallRequest({ profile, repo: '' })} size="xs" variant="textStrong">
         {d.installModal.installFromGit}
       </Button>
       <Tip label={d.openFolder}>
@@ -787,7 +788,7 @@ export const PluginsTab = memo(function PluginsTab({
       notice={notice}
       // A plugin row's `source` IS its catalog tier (catalog-data.ts::catalogEntry);
       // CatalogEntry has no `tier` field, so don't "fix" this to entry.tier.
-      onInstall={entry => openCatalogPluginInstall(entry, scope, { tier: entry.source })}
+      onInstall={entry => openCatalogPluginInstall(entry, profile, { tier: entry.source })}
       onQueryChange={onQueryChange}
       query={query}
       renderInstalledAction={entry => {

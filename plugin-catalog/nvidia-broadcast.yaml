@@ -1,4 +1,5 @@
 name: nvidia-broadcast
+app_server: nvidia-broadcast
 repo: https://github.com/NousResearch/hermes-nvidia
 sha: de75692b479dc88b95e428a9cb25091d3fb0e327
 subdir: nvidia-broadcast
@@ -9,6 +10,7 @@ description: "NVIDIA Broadcast control through its local MCP gateway: camera, mi
   desktop session. Disclosure: the tools change live audio and video effects on this machine; nothing
   leaves loopback."
 title: NVIDIA Broadcast
+app_download_url: https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/
 maintainer: NousResearch
 tier: verified
 category: tools

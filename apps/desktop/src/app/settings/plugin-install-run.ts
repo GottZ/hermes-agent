@@ -8,6 +8,7 @@ import {
   installAgentPlugin,
   loadAgentPlugins
 } from '@/store/agent-plugins'
+import { requestGatewayForAgent } from '@/store/gateway'
 import { notify } from '@/store/notifications'
 import type { AppGuidance } from '@/store/plugin-app-guidance'
 import type { PluginInstallRequest } from '@/store/plugin-install-request'
@@ -54,6 +55,27 @@ export interface InstallDeps {
   copy: InstallModalCopy
   navigate: (to: string) => void
   requestGateway: GatewayRequest
+}
+
+/** Keep an explicit registry owner across preflight, install and inventory RPCs.
+ * Legacy links with no pin continue using the ambient backend request. */
+export function installRequestGateway(request: PluginInstallRequest, ambient: GatewayRequest): GatewayRequest {
+  const scope = request.profile
+
+  if (!scope || typeof scope !== 'object' || !scope.connectionId?.trim()) {
+    return ambient
+  }
+
+  const connectionId = scope.connectionId.trim()
+
+  return <T>(method: string, params?: Record<string, unknown>, timeoutMs?: number) =>
+    requestGatewayForAgent<T>(
+      connectionId,
+      String(params?.profile ?? scope.profile ?? 'default'),
+      method,
+      params,
+      timeoutMs
+    )
 }
 
 export type InstallOutcome =

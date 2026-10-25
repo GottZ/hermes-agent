@@ -195,6 +195,8 @@ screenshots: []             # optional, up to 6 https images on a GitHub host; g
 readme: true                # optional, default true; the README at the PINNED SHA renders on /docs/plugins/<name>
 platforms: []               # optional, e.g. [linux, macos]; empty = all
 title: ""                   # optional human name on cards ("NVIDIA App"); default = name
+app_server: ""              # with app_download_url: exact plugin.json server declaring this app
+app_download_url: ""        # optional reviewed HTTPS vendor URL; only offered at the catalog pin
 onboarding: false           # optional; offered on the Desktop onboarding card (official or verified entries only)
 known_issues: []            # optional strings shown at the install prompt; informational, never blocks
 capabilities:

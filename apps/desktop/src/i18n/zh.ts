@@ -622,6 +622,8 @@ export const zhOverrides = {
           missing: name => `${name} 尚未安装。请先在后端计算机上安装，再安装此插件。`,
           oldVersion: (name, required, found) =>
             `需要 ${name} ${required} 或更高版本（当前：${found || '旧版本'}）。请在后端计算机上更新。`,
+          unreadableVersion: (name, required) =>
+            `无法读取 ${name} 的已安装版本。需要 ${required} 或更高版本；请先在后端计算机确认版本，再重试。`,
           unsupportedOs: name => `后端操作系统不支持 ${name}。`,
           unsupportedGpu: name => `后端 GPU 不支持 ${name}。`,
           uncertain: name => `无法确认 ${name} 是否可用。你可以尝试安装插件。`,

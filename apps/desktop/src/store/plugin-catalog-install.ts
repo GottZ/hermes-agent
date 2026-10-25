@@ -1,3 +1,4 @@
+import type { ProfileScope } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { lookupPluginCatalogEntry, type PluginCatalogEntry, type PluginCatalogLookupError } from '@/lib/plugin-catalog'
 
@@ -14,7 +15,7 @@ import { openPluginInstallRequest, type PluginInstallRequest } from './plugin-in
  */
 export function openCatalogPluginInstall(
   entry: PluginCatalogEntry,
-  profile: null | string,
+  profile: ProfileScope,
   options: Pick<PluginInstallRequest, 'stayAfterInstall' | 'tier' | 'title'> = {}
 ): void {
   const existing = $agentPlugins.get().find(row => row.catalog_name === entry.name || row.name === entry.name)

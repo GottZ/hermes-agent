@@ -638,6 +638,7 @@ catalog: CatalogTranslations
         appGuidance: {
           missing: (name: string) => string
           oldVersion: (name: string, required: string, found: string) => string
+          unreadableVersion: (name: string, required: string) => string
           unsupportedOs: (name: string) => string
           unsupportedGpu: (name: string) => string
           uncertain: (name: string) => string

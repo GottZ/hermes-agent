@@ -43,5 +43,5 @@ def test_onboarding_rows_are_curated_entries_this_os_runs(catalog):
 def test_app_state_comes_from_the_pinned_declaration(catalog):
     rows = {r["name"]: r for r in presence_mod.onboarding_entries()}
     # A declared app that is absent greys the row with a reason; no declaration is unknown, never "present".
-    assert rows["everywhere"]["app_state"] == "missing_app" and "Everywhere App" in rows["everywhere"]["sentence"]
+    assert rows["everywhere"]["app_state"] == "missing_app" and "everywhere" in rows["everywhere"]["sentence"]
     assert rows["here-only"]["app_state"] == "unknown" and rows["here-only"]["sentence"] == ""

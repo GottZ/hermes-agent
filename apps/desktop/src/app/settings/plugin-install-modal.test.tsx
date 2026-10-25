@@ -111,9 +111,11 @@ afterEach(() => {
 
 describe('A reviewed catalog pick', () => {
   it('requests a fresh chat even when help targets the already active profile', async () => {
-    requestGateway.mockImplementation(async (_method, params) => params?.action === 'presence'
-      ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
-      : { plugins: [] })
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
+        : { plugins: [] }
+    )
     renderFlow()
     act(() => openPluginInstallRequest(BLENDER))
     expect(await screen.findByText(/Blender is not installed/)).toBeTruthy()
@@ -178,6 +180,60 @@ describe('A reviewed catalog pick', () => {
     expect(requestGateway.mock.calls.filter(([, params]) => params?.action === 'presence')).toHaveLength(3)
   })
 
+  it('ignores a late manual recheck for A after switching the install target to B', async () => {
+    const recheckA = deferred<unknown>()
+    const checkB = deferred<unknown>()
+    let checksA = 0
+    requestGateway.mockImplementation(async (_method, params) => {
+      if (params?.action !== 'presence') {
+        return { plugins: [] }
+      }
+
+      if (params.profile === 'research') {
+        return checkB.promise
+      }
+
+      checksA += 1
+
+      return checksA === 1
+        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
+        : recheckA.promise
+    })
+
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    expect(await screen.findByText(/Blender is not installed/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Check again/ }))
+    await waitFor(() => expect(checksA).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Install for profile' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Research Bot' }))
+    await waitFor(() =>
+      expect(
+        requestGateway.mock.calls.some(([, params]) => params?.action === 'presence' && params.profile === 'research')
+      ).toBe(true)
+    )
+
+    await act(async () => {
+      checkB.resolve({
+        presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }]
+      })
+      await checkB.promise
+    })
+    expect(screen.getByRole('status').textContent).toContain('Research Bot')
+    expect(installButton().disabled).toBe(true)
+
+    await act(async () => {
+      recheckA.resolve({
+        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }]
+      })
+      await recheckA.promise
+    })
+    expect(screen.getByRole('status').textContent).toContain('Research Bot')
+    expect(screen.getByText(/Blender is not installed/)).toBeTruthy()
+    expect(installButton().disabled).toBe(true)
+  })
+
   it('treats unsupported hardware as blocked without any vendor download', async () => {
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'
@@ -199,6 +255,31 @@ describe('A reviewed catalog pick', () => {
     expect(await screen.findByText(/GPU.*not supported/)).toBeTruthy()
     expect(installButton().disabled).toBe(true)
     expect(screen.queryByRole('link', { name: /Download/ })).toBeNull()
+  })
+
+  it('does not invite another install when the backend cannot read the required app version', async () => {
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? {
+            presence: [
+              {
+                name: 'blender',
+                reason: 'uncertain',
+                app_title: 'Blender',
+                required_version: '4.3',
+                found_version: null,
+                target_host: 'backend'
+              }
+            ]
+          }
+        : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toMatch(/version/i)
+    expect(status.textContent).not.toMatch(/try installing/i)
+    expect(installButton().disabled).toBe(true)
   })
 
   it('shows typed post-preflight refusal as app guidance and does not retry blindly', async () => {

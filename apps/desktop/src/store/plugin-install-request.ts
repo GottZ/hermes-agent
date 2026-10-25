@@ -1,5 +1,7 @@
 import { atom } from 'nanostores'
 
+import type { ProfileScope } from '@/hermes'
+
 /** Which plugin component(s) a legacy deeplink pre-selects after probe. */
 export type PluginInstallLegacyHint = 'agent' | 'desktop' | null
 
@@ -22,9 +24,8 @@ export interface PluginInstallRequest {
   title?: string
   /** One line on what the plugin does (the catalog description's first sentence). */
   summary?: string
-  /** Capabilities profile scope the pick was made under; the agent half
-   *  installs into THIS profile (null/undefined = active profile). */
-  profile?: string | null
+  /** Exact Capabilities owner; legacy strings/null retain their ambient route. */
+  profile?: ProfileScope
   /** The caller keeps the user where they are after a successful install (the setup chat's plugins card). */
   stayAfterInstall?: boolean
 }

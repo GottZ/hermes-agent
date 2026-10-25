@@ -26,6 +26,8 @@ export const ruPluginSettings = {
         missing: (name: string) => `${name} не установлен. Сначала установите его на компьютере бэкенда.`,
         oldVersion: (name: string, required: string, found: string) =>
           `Нужен ${name} версии ${required} или новее (обнаружена ${found || 'старая версия'}). Обновите его на бэкенде.`,
+        unreadableVersion: (name: string, required: string) =>
+          `Не удалось определить установленную версию ${name}. Требуется версия ${required} или новее; проверьте её на бэкенде перед повторной попыткой.`,
         unsupportedOs: (name: string) => `${name} не поддерживается операционной системой бэкенда.`,
         unsupportedGpu: (name: string) => `GPU бэкенда не поддерживается для ${name}.`,
         uncertain: (name: string) => `Не удалось проверить наличие ${name}. Можно попробовать установить плагин.`,

@@ -22,6 +22,8 @@ export const jaPluginSettings = {
           `${name} がインストールされていません。このプラグインの前にバックエンドのコンピューターにインストールしてください。`,
         oldVersion: (name: string, required: string, found: string) =>
           `${name} ${required} 以降が必要です（検出: ${found || '古いバージョン'}）。バックエンドで更新してください。`,
+        unreadableVersion: (name: string, required: string) =>
+          `${name} のインストール済みバージョンを確認できませんでした。${required} 以降が必要です。再試行する前にバックエンドでバージョンを確認してください。`,
         unsupportedOs: (name: string) => `${name} はバックエンドの OS に対応していません。`,
         unsupportedGpu: (name: string) => `バックエンドの GPU は ${name} に対応していません。`,
         uncertain: (name: string) => `${name} を利用できるか確認できませんでした。プラグインのインストールを試せます。`,

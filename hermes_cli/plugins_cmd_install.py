@@ -318,8 +318,13 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
         if result.offerable:
             continue
         problem = availability_problem(result)
-        reason = (describe(server_decl.declaration, result, problem, display_name=app_title)
-                  if problem else f"its app is unavailable ({result.state}).")
+        if result.state == "version_too_old" and not result.version:
+            reason = (f"could not determine {app_title or plugin_name}'s installed version; "
+                      f"version {result.min_version} or newer is required. Check the app's version "
+                      "on this machine before retrying.")
+        else:
+            reason = (describe(server_decl.declaration, result, problem, display_name=app_title)
+                      if problem else f"its app is unavailable ({result.state}).")
         from hermes_cli.plugin_catalog_presence import app_guidance
         # The clone itself is authoritative at the publication gate, not an earlier preflight pin.
         # A custom source has no trusted vendor URL; the catalog identity is attached later.
@@ -820,13 +825,14 @@ def _resolve_source(identifier: str, catalog_name: Optional[str]) -> tuple:
     return entry, identifier, warnings, None
 
 
-def _app_refusal_result(exc, entry) -> dict[str, Any]:
+def _app_refusal_result(exc, entry, *, at_reviewed_pin: bool = True) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "error": str(exc)}
     if guidance := getattr(exc, "app_guidance", None):
         from hermes_cli.plugin_catalog_presence import app_guidance
         result["app_guidance"] = (app_guidance(entry, guidance["reason"],
                                   required_version=guidance["required_version"],
-                                  found_version=guidance["found_version"]) if entry else guidance)
+                                  found_version=guidance["found_version"]) if entry and at_reviewed_pin
+                                  else {**guidance, "download_url": None})
     return result
 
 
@@ -837,12 +843,15 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
     an approved *ref* names another commit; a fresh install clones at *ref* when set, else the pin."""
     from hermes_cli import plugins_cmd_catalog as catalog
     ref = (ref or "").strip() or None
+    at_reviewed_pin = entry is not None and (ref is None or ref.lower() == entry.sha.lower())
     on_disk = _catalog_install_on_disk(entry.name, ref) if entry is not None and not force else None
-    if on_disk is not None:
+    if on_disk is not None and entry is not None:
+        installed = catalog.catalog_install_record(on_disk[0])
+        at_reviewed_pin = at_reviewed_pin and bool(installed) and installed.get("sha") == entry.sha
         try:
-            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], entry.title or None)
+            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], (entry.title or None) if at_reviewed_pin else None)
         except _pc().PluginOperationError as exc:
-            return _app_refusal_result(exc, entry)
+            return _app_refusal_result(exc, entry, at_reviewed_pin=at_reviewed_pin)
         return on_disk
 
     def _install() -> tuple:
@@ -858,7 +867,7 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
     except _pc().PluginScanBlocked as exc:
         return scan_blocked_result(exc)
     except _pc().PluginOperationError as exc:
-        return _app_refusal_result(exc, entry)
+        return _app_refusal_result(exc, entry, at_reviewed_pin=at_reviewed_pin)
 
 
 def _enable_placed(installed_name: str, deps, step: Callable[[InstallPhase], None]) -> Optional[dict]:

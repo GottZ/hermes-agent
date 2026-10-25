@@ -40,6 +40,20 @@ def test_verified_tier_survives_load_and_unknown_tier_is_rejected(tmp_path):
     (tmp_path / "b.yaml").write_text(yaml.safe_dump(_entry("bogus", tier="platinum")))
     assert {e.name: e.tier for e in pc.load_catalog(tmp_path)} == {"vendor": "verified"}
 
+def test_vendor_download_metadata_round_trips_and_invalid_url_is_discarded():
+    entry = pc.entry_from_mapping(_entry(title="Paint Studio", app_server="paint",
+                                         app_download_url="https://paint.example/download"), "reviewed")
+    assert entry.app_download_url == "https://paint.example/download"
+    assert entry.to_dict()["app_download_url"] == "https://paint.example/download"
+    assert entry.to_dict()["app_server"] == "paint"
+    assert pc.entry_from_mapping(_entry(title="Paint Studio", app_download_url="https://paint.example/download"),
+                                 "unbound").app_download_url == ""
+    for bad in ("http://paint.example/download", "https://paint.example.evil.test@evil.test/path",
+                "https://127.0.0.1/download", "https://paint.example/has space"):
+        invalid = pc.entry_from_mapping(_entry(app_download_url=bad), "untrusted")
+        assert invalid.app_download_url == ""
+
+
 def test_category_defaults_to_other_and_unknown_category_is_rejected(tmp_path):
     """``category`` is the browse shelf: absent → ``desktop``; a value outside CATALOG_CATEGORIES is an
     invalid entry (skipped with a warning) so a typo cannot create a phantom shelf on the site."""

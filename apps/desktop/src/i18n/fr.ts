@@ -784,6 +784,8 @@ export const frOverrides = {
           missing: name => `${name} n’est pas installé. Installez-le sur l’ordinateur du backend avant ce plugin.`,
           oldVersion: (name, required, found) =>
             `${name} ${required} ou plus récent est nécessaire (version détectée : ${found || 'ancienne'}). Mettez-le à jour sur le backend.`,
+          unreadableVersion: (name, required) =>
+            `Impossible de déterminer la version installée de ${name}. La version ${required} ou plus récente est requise ; vérifiez-la sur le backend avant de réessayer.`,
           unsupportedOs: name => `${name} n’est pas pris en charge par le système du backend.`,
           unsupportedGpu: name => `Le GPU du backend n’est pas pris en charge pour ${name}.`,
           uncertain: name =>
