@@ -101,7 +101,7 @@ describe('openCatalogPluginInstall', () => {
     $notifications.set([])
   })
 
-  it('short-circuits with a success toast when the entry is installed and current', () => {
+  it('does not confuse a stale or foreign owner plugin list with the selected install owner', () => {
     $agentPlugins.set([
       {
         catalog_name: 'weather',
@@ -114,10 +114,14 @@ describe('openCatalogPluginInstall', () => {
       }
     ])
 
-    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, 'workbot')
+    openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, {
+      connectionId: 'local', profile: 'workbot'
+    })
 
-    expect($pluginInstallRequest.get()).toBeNull()
-    expect($notifications.get()[0]).toMatchObject({ kind: 'success' })
+    expect($pluginInstallRequest.get()).toMatchObject({
+      catalogName: 'weather', profile: { connectionId: 'local', profile: 'workbot' }
+    })
+    expect($notifications.get()).toEqual([])
   })
 
   it("carries the caller's stay-in-place choice to the install dialog", () => {

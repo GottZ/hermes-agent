@@ -2,7 +2,6 @@ import type { ProfileScope } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { lookupPluginCatalogEntry, type PluginCatalogEntry, type PluginCatalogLookupError } from '@/lib/plugin-catalog'
 
-import { $agentPlugins } from './agent-plugins'
 import { notify } from './notifications'
 import { openPluginInstallRequest, type PluginInstallRequest } from './plugin-install-request'
 
@@ -18,14 +17,8 @@ export function openCatalogPluginInstall(
   profile: ProfileScope,
   options: Pick<PluginInstallRequest, 'stayAfterInstall' | 'tier' | 'title'> = {}
 ): void {
-  const existing = $agentPlugins.get().find(row => row.catalog_name === entry.name || row.name === entry.name)
-
-  if (existing && !existing.update_available) {
-    notify({ kind: 'success', message: translateNow('skills.plugins.alreadyInstalled', entry.name) })
-
-    return
-  }
-
+  // The shared inventory has only a profile label, not a connection owner.
+  // Never treat another backend's matching row as proof this owner has the plugin.
   openPluginInstallRequest({
     catalogName: entry.name,
     profile,

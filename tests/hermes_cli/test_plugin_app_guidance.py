@@ -242,6 +242,20 @@ def test_no_requirements_sibling_does_not_mask_app_not_running(monkeypatch):
                         else presence.Presence("app_not_running", "start app", "app_not_running"))
     assert presence.presence(_entry()).reason == "app_not_running"
 
+def test_no_requirements_sibling_does_not_mask_available_app(monkeypatch):
+    from hermes_cli import agent_plugins
+    manifest = {"extensions": {"com.nousresearch.hermes": {"servers": {"a": {}, "b": {}}}}}
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: manifest)
+    monkeypatch.setattr(agent_plugins, "_server_declarations", lambda *_: {
+        "a": SimpleNamespace(declaration="unconstrained", liveness=None),
+        "b": SimpleNamespace(declaration="available", liveness=None),
+    })
+    monkeypatch.setattr(presence, "_server_presence", lambda decl, live, title:
+                        presence.Presence("unknown", reason="no_requirements") if decl == "unconstrained"
+                        else presence.Presence("present", reason="available"))
+    found = presence.presence(_entry())
+    assert found.reason == "available" and found.state == "present"
+
 def test_no_requirements_alone_remains_unknown(monkeypatch):
     from hermes_platform.resolver import availability as availability_mod
 
@@ -296,6 +310,44 @@ def test_install_refusal_never_labels_a_sibling_app_as_reviewed_vendor(monkeypat
         install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App", app_server="nvidia-app")
     assert "NVIDIA App" not in str(raised.value)
     assert raised.value.app_server == "other-app"
+
+def test_install_refusal_prioritizes_unsupported_sibling_over_missing_app(monkeypatch, tmp_path):
+    from hermes_cli import agent_plugins
+    from hermes_platform.resolver import availability as availability_mod
+    (tmp_path / "plugin.json").write_text("{}")
+    monkeypatch.setattr(agent_plugins, "load_agent_plugin", lambda *_: SimpleNamespace(server_declarations={
+        "nvidia-app": SimpleNamespace(declaration=SimpleNamespace(name="nvidia-app", required_gpu=None)),
+        "other": SimpleNamespace(declaration=SimpleNamespace(name="other", required_gpu=None)),
+    }))
+    monkeypatch.setattr(availability_mod, "availability", lambda decl: Availability(
+        "missing_app" if decl.name == "nvidia-app" else "unsupported_os"))
+    with pytest.raises(PluginOperationError) as raised:
+        install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App", app_server="nvidia-app")
+    assert raised.value.app_guidance["reason"] == "unsupported_os"
+    assert raised.value.app_server == "other"
+    assert "NVIDIA App" not in str(raised.value)
+
+def test_local_app_declaration_must_match_pin_before_vendor_guidance(monkeypatch):
+    from hermes_cli import plugin_catalog as catalog
+    reviewed = next(e for e in catalog.load_catalog() if e.name == "nvidia-app")
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [reviewed])
+    pinned = {"extensions": {"com.nousresearch.hermes": {"servers": {"nvidia-app": {
+        "app": {"win32": {"presence": "executable", "location": "C:/NVIDIA.exe"}},
+        "requires": {"app": True},
+    }}}}}
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: pinned)
+    from hermes_cli.agent_plugins import _server_declarations
+    exact = _server_declarations(pinned, {"nvidia-app": {}})["nvidia-app"].declaration
+    changed = parse_declaration("nvidia-app", {"win32": {"presence": "executable", "location": "C:/Other.exe"}},
+                                {"app": True}, where="test")
+    for actual, expect_url in ((exact, True), (changed, False)):
+        refusal = PluginOperationError("missing", failure_class="incompatible")
+        refusal.app_guidance = presence.app_guidance(SimpleNamespace(name="nvidia-app", repo=""), "missing_app")
+        refusal.app_server = "nvidia-app"
+        refusal.app_declaration = actual
+        result = install._app_refusal_result(refusal, reviewed, at_reviewed_pin=True)["app_guidance"]
+        assert bool(result["download_url"]) is expect_url
+        assert result["app_title"] == ("NVIDIA App" if expect_url else "nvidia-app")
 
 
 def test_install_refusal_carries_typed_reason_without_publishing(monkeypatch, tmp_path):

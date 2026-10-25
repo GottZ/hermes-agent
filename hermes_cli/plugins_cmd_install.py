@@ -314,10 +314,13 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
     except ValueError as exc:
         raise _pc().PluginOperationError(f"Plugin '{plugin_name}' is unavailable: {exc}.",
                                          failure_class="manifest_invalid") from exc
-    for server_name, server_decl in package.server_declarations.items():
-        result = availability(server_decl.declaration)
-        if result.offerable:
-            continue
+    blocked = [(name, decl, result) for name, decl in package.server_declarations.items()
+               if not (result := availability(decl.declaration)).offerable]
+    if blocked:
+        # Every declared server must pass. Prefer structural incompatibility over a
+        # missing app: installing one app cannot repair an unsupported sibling.
+        order = {"unsupported_os": 0, "unsupported_gpu": 1, "version_too_old": 2, "missing_app": 3}
+        server_name, server_decl, result = min(blocked, key=lambda row: order.get(row[2].state, 4))
         display_title = app_title if not app_server or app_server == server_name else None
         problem = availability_problem(result)
         if result.state == "version_too_old" and not result.version:
@@ -337,6 +340,7 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
                                           else result.state, required_version=result.min_version,
                                           found_version=result.version)
         error.app_server = server_name
+        error.app_declaration = server_decl.declaration
         raise error
 
 
@@ -836,8 +840,11 @@ def _app_refusal_result(exc, entry, *, at_reviewed_pin: bool = True) -> dict[str
         result["app_guidance"] = (app_guidance(entry, guidance["reason"],
                                   required_version=guidance["required_version"],
                                   found_version=guidance["found_version"],
-                                  server_name=getattr(exc, "app_server", None)) if entry and at_reviewed_pin
-                                  else {**guidance, "download_url": None})
+                                  server_name=getattr(exc, "app_server", None),
+                                  actual_declaration=exc.app_declaration) if entry and at_reviewed_pin
+                                  and getattr(exc, "app_declaration", None) is not None
+                                  else {**guidance, "download_url": None,
+                                        "app_title": entry.name if entry else guidance["app_title"]})
     return result
 
 
@@ -854,7 +861,7 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
         installed = catalog.catalog_install_record(on_disk[0])
         at_reviewed_pin = at_reviewed_pin and bool(installed) and installed.get("sha") == entry.sha
         try:
-            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], (entry.title or None) if at_reviewed_pin else None,
+            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], None,
                                                 app_server=entry.app_server if at_reviewed_pin else None)
         except _pc().PluginOperationError as exc:
             return _app_refusal_result(exc, entry, at_reviewed_pin=at_reviewed_pin)

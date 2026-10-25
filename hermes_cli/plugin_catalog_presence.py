@@ -40,7 +40,7 @@ class Presence:
 
 UNKNOWN = Presence("unknown")
 
-def _reviewed_app(entry: Any, server_name: str | None = None):
+def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None):
     """Only a catalog pin with the exact reviewed server app declaration may name a vendor."""
     from hermes_cli.plugin_catalog import load_catalog_live
     reviewed = next((item for item in load_catalog_live()
@@ -61,16 +61,18 @@ def _reviewed_app(entry: Any, server_name: str | None = None):
         server = declarations.get(reviewed.app_server)
         app_servers = [name for name, candidate in declarations.items()
                        if candidate.declaration.requires_app and candidate.declaration.app is not None]
-        return reviewed if (server and reviewed.app_server in app_servers
+        return reviewed if (server and (actual_declaration is None or server.declaration == actual_declaration)
+                            and reviewed.app_server in app_servers
                             and (server_name == reviewed.app_server if server_name else len(app_servers) == 1)) else None
     except (TypeError, ValueError, AttributeError):
         return None
 
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
-                 found_version: str | None = None, server_name: str | None = None) -> dict[str, str | None]:
+                 found_version: str | None = None, server_name: str | None = None,
+                 actual_declaration: Any = None) -> dict[str, str | None]:
     """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin."""
-    reviewed = _reviewed_app(entry, server_name)
+    reviewed = _reviewed_app(entry, server_name, actual_declaration)
     return {"reason": reason, "app_title": reviewed.title if reviewed else entry.name,
             "required_version": required_version, "found_version": found_version,
             "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
@@ -177,9 +179,9 @@ def presence(entry: Any) -> Presence:
     # actionable missing-app sibling (which would misleadingly invite an install).
     rank = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2,
             "missing_app": 3, "version_too_old": 4, "app_not_running": 5,
-            "no_requirements": 6, "available": 7}
-    result = min(found, key=lambda p: rank[p.reason]) if found else UNKNOWN
-    return UNKNOWN if result.reason == "no_requirements" else result
+            "available": 6}
+    relevant = [p for p in found if p.reason != "no_requirements"]
+    return min(relevant, key=lambda p: rank[p.reason]) if relevant else UNKNOWN
 
 
 def _onboarding_catalog() -> list:

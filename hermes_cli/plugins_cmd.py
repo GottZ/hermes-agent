@@ -88,6 +88,7 @@ class PluginOperationError(Exception):
     """
 
     failure_class = "other"
+    app_declaration: Any = None  # The checked clone's requirement, for reviewed vendor guidance.
 
     def __init__(self, *args, failure_class: Optional[str] = None):
         super().__init__(*args)
