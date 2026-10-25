@@ -5,6 +5,7 @@ import {
   appGuidanceFromError,
   isAppBlocked,
   officialAppDownloadUrl,
+  PRESENCE_TIMEOUT_MS,
   presenceForCatalogPlugin
 } from './plugin-app-guidance'
 
@@ -19,12 +20,30 @@ describe('catalog app preflight', () => {
   it('asks the backend for only the selected catalog name and target profile', async () => {
     const request = vi.fn(async () => ({ presence: [{ name: 'game-editor', ...missing }] }))
     expect(await presenceForCatalogPlugin(request as never, 'game-editor', 'research')).toMatchObject(missing)
-    expect(request).toHaveBeenCalledWith('plugins.manage', {
-      action: 'presence',
-      name: 'game-editor',
-      names: ['game-editor'],
-      profile: 'research'
+    expect(request).toHaveBeenCalledWith(
+      'plugins.manage',
+      {
+        action: 'presence',
+        name: 'game-editor',
+        names: ['game-editor'],
+        profile: 'research'
+      },
+      PRESENCE_TIMEOUT_MS
+    )
+  })
+
+  it('bounds the read so a stalled backend leaves Install possible instead of disabled', async () => {
+    const request = vi.fn(async () => {
+      throw new Error('request timed out after 30s: plugins.manage')
     })
+
+    expect(PRESENCE_TIMEOUT_MS).toBeLessThan(120_000)
+    expect(await presenceForCatalogPlugin(request as never, 'game-editor', 'default')).toEqual({
+      reason: 'uncertain',
+      app_title: 'game-editor',
+      target_host: 'backend'
+    })
+    expect(isAppBlocked({ reason: 'uncertain', app_title: 'game-editor', target_host: 'backend' })).toBe(false)
   })
 
   it('treats older backend method errors as unsupported and missing rows as uncertain', async () => {
@@ -87,8 +106,9 @@ describe('catalog app preflight', () => {
     'https://10.1/x',
     'https://printer.local/',
     'https://nas.home.arpa/',
-    'https://api.internal/'
-  ])('rejects a numeric or special-use vendor host: %s', url => {
+    'https://api.internal/',
+    'https://www.nvidia.com:443/en-us/software/nvidia-app/'
+  ])('rejects a numeric or special-use vendor host or an explicit port: %s', url => {
     expect(officialAppDownloadUrl({ ...missing, download_url: url })).toBeNull()
   })
 

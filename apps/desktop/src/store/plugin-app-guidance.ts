@@ -52,6 +52,10 @@ function parseAppGuidance(value: unknown): AppGuidance | null {
   }
 }
 
+/** A presence read that takes longer answers "uncertain": Install stays possible and the backend's
+ *  install gate decides, instead of a stalled read keeping Install disabled until the RPC default. */
+export const PRESENCE_TIMEOUT_MS = 30_000
+
 /** Only catalog picks use backend app discovery. Null means an older backend has no preflight. */
 export async function presenceForCatalogPlugin(
   request: GatewayRequest,
@@ -60,12 +64,16 @@ export async function presenceForCatalogPlugin(
 ): Promise<AppGuidance | null> {
   try {
     // `names` is the current batch contract; `name` allows single-name implementations.
-    const result = await request<{ presence?: unknown }>('plugins.manage', {
-      action: 'presence',
-      name,
-      names: [name],
-      profile
-    })
+    const result = await request<{ presence?: unknown }>(
+      'plugins.manage',
+      {
+        action: 'presence',
+        name,
+        names: [name],
+        profile
+      },
+      PRESENCE_TIMEOUT_MS
+    )
 
     if (!Array.isArray(result?.presence)) {
       return null
@@ -100,7 +108,9 @@ export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
     guidance.target_host !== 'backend' ||
     !['missing_app', 'version_too_old'].includes(guidance.reason) ||
     !value ||
-    Array.from(value).some(char => /\s/.test(char) || char.charCodeAt(0) < 32)
+    Array.from(value).some(char => /\s/.test(char) || char.charCodeAt(0) < 32) ||
+    // The backend refuses any explicit port; the URL parser would silently drop a default ":443".
+    /^https:\/\/[^/?#@]*:/i.test(value)
   ) {
     return null
   }
