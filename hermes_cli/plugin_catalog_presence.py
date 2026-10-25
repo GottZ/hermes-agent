@@ -45,9 +45,18 @@ UNKNOWN = Presence("unknown")
 # that declares an app or GPU. Distinct from UNKNOWN, which means the declaration could not be judged.
 NO_REQUIREMENTS = Presence("unknown", reason="no_requirements")
 # The one blocker an all-of plugin names, shared with the install refusal so the card, the dialog and
-# the refusal agree: an unsupported or uncertain server must not be masked by an installable sibling.
-BLOCKER_RANK = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2, "missing_app": 3,
-                "version_too_old": 4, "app_not_running": 5, "available": 6}
+# the refusal agree. Structural blockers first (installing an app cannot repair them), then an app
+# whose installed version cannot be read (both surfaces refuse on it), then the concrete app blockers
+# the installer names. A server that merely could not be judged comes after those: it must not hide
+# an actionable blocker behind "could not confirm" while the install is refused for that blocker.
+BLOCKER_RANK = {"unsupported_os": 0, "unsupported_gpu": 1, "unreadable_version": 2, "missing_app": 3,
+                "version_too_old": 4, "uncertain": 5, "app_not_running": 6, "available": 7}
+
+
+def blocker_rank(reason: str, required_version: str | None = None, found_version: str | None = None) -> int:
+    """``uncertain`` with a required but unread version is the refusable unreadable-version case."""
+    key = "unreadable_version" if reason == "uncertain" and required_version and not found_version else reason
+    return BLOCKER_RANK.get(key, len(BLOCKER_RANK))
 _OS_LABELS = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}
 
 def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None, *,
@@ -166,7 +175,8 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
             "app_not_running", f"{title} needs an interactive desktop session", "app_not_running", available.min_version)
     definition = decl.app_for(facts.os_family())
     if definition is None:
-        return Presence("unknown", f"Could not inspect {title}", "uncertain", available.min_version)
+        # Not a version question: the app was found, only its liveness cannot be resolved here.
+        return Presence("unknown", f"Could not inspect {title}", "uncertain")
     resolver = AppResolver(live.app_definition(definition))
     probe = resolver.probe(resolver.locate(), effort=Effort.LOCAL)
     return Presence("present", reason="available", required_version=available.min_version) if probe.running.value is True else Presence(
@@ -214,7 +224,8 @@ def presence(entry: Any) -> Presence:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN
     relevant = [p for p in found if p.reason != "no_requirements"]
-    return min(relevant, key=lambda p: BLOCKER_RANK[p.reason]) if relevant else NO_REQUIREMENTS
+    return (min(relevant, key=lambda p: blocker_rank(p.reason, p.required_version, p.found_version))
+            if relevant else NO_REQUIREMENTS)
 
 
 def _onboarding_catalog(catalog: list | None = None) -> list:

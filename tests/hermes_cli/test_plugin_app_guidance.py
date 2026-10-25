@@ -388,6 +388,32 @@ def test_install_refusal_names_the_blocker_the_presence_card_named(monkeypatch, 
     assert presence.BLOCKER_RANK["missing_app"] < presence.BLOCKER_RANK["version_too_old"]
 
 
+def _two_servers(monkeypatch, verdicts):
+    from hermes_cli import agent_plugins
+
+    manifest = {"extensions": {"com.nousresearch.hermes": {"servers": {name: {} for name in verdicts}}}}
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: manifest)
+    monkeypatch.setattr(agent_plugins, "_server_declarations", lambda *_: {
+        name: SimpleNamespace(declaration=name, liveness=None) for name in verdicts})
+    monkeypatch.setattr(presence, "_server_presence", lambda decl, live, title: verdicts[decl])
+
+
+def test_a_server_that_could_not_be_judged_does_not_hide_a_missing_app(monkeypatch):
+    """The installer refuses on the missing app; the dialog must name it, not "could not confirm"."""
+    _two_servers(monkeypatch, {"probe-failed": presence.UNKNOWN,
+                               "paint": presence.Presence("missing_app", "needs paint", "missing_app")})
+    assert presence.presence(_entry()).reason == "missing_app"
+
+
+def test_an_unreadable_required_version_still_outranks_a_missing_app(monkeypatch):
+    """Both surfaces refuse on an unreadable version, and the refusal names it first."""
+    _two_servers(monkeypatch, {
+        "versioned": presence.Presence("unknown", "Could not determine x's version", "uncertain", "11.0"),
+        "paint": presence.Presence("missing_app", "needs paint", "missing_app")})
+    found = presence.presence(_entry())
+    assert found.reason == "uncertain" and found.required_version == "11.0"
+
+
 def test_named_presence_reads_the_live_catalog_once_per_request(monkeypatch):
     """Each live-catalog load re-parses every in-tree entry (1.2 s on a Windows backend)."""
     from hermes_cli import plugin_catalog as catalog
