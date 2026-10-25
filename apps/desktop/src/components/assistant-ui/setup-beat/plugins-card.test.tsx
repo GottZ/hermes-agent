@@ -32,7 +32,11 @@ vi.mock('@/lib/plugin-catalog', async original => ({
 }))
 
 import { queryClient } from '@/lib/query-client'
-import { $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsProfile } from '@/store/agent-plugins'
+import {
+  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsErrorByOwner,
+  $agentPluginsLoadingByOwner,
+  $agentPluginsProfile
+} from '@/store/agent-plugins'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
 
 import { PluginsCard } from './plugins-card'
@@ -41,10 +45,16 @@ beforeEach(() => {
   queryClient.clear()
   $agentPlugins.set([])
   $agentPluginsByOwner.set({})
+  $agentPluginsErrorByOwner.set({})
+  $agentPluginsLoadingByOwner.set({})
   $agentPluginsProfile.set(undefined)
   $agentPluginsConnectionId.set(undefined)
   closePluginInstallRequest()
-  routedRequest.mockClear()
+  routedRequest.mockReset()
+  routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
+    params.action === 'presence'
+      ? { presence: [{ name: 'nvidia-app', title: 'NVIDIA App', state: 'missing_app', sentence: 'needs NVIDIA App' }] }
+      : { plugins: [] })
   lookup.mockClear()
 })
 
@@ -66,4 +76,45 @@ it('loads the chat owner inventory and pins the full owner when installing from 
   expect(routedRequest).toHaveBeenCalledWith('local', 'workbot', 'plugins.manage',
     expect.objectContaining({ action: 'presence', names: ['nvidia-app'] }))
   expect(lookup).toHaveBeenCalledWith('nvidia-app')
+})
+
+it('requires an owner inventory retry rather than treating a failed list as not installed', async () => {
+  routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
+    params.action === 'presence'
+      ? { presence: [{ name: 'nvidia-app', title: 'NVIDIA App', state: 'missing_app' }] }
+      : Promise.reject(new Error('inventory unavailable')))
+  render(
+    <QueryClientProvider client={queryClient}>
+      <PluginsCard names={['nvidia-app']} onContinue={vi.fn()} />
+    </QueryClientProvider>
+  )
+  expect((await screen.findByRole('alert')).textContent).toContain('inventory unavailable')
+  expect(screen.queryByRole('button', { name: /NVIDIA App/ })).toBeNull()
+  expect(lookup).not.toHaveBeenCalled()
+  routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
+    params.action === 'presence'
+      ? { presence: [{ name: 'nvidia-app', title: 'NVIDIA App', state: 'missing_app' }] }
+      : { plugins: [{ name: 'nvidia-app', catalog_name: 'nvidia-app' }] })
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByText('Installed')).toBeTruthy()
+  expect(lookup).not.toHaveBeenCalled()
+})
+
+it('shows a retry instead of no plugins when the backend presence query fails', async () => {
+  routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
+    params.action === 'presence'
+      ? Promise.reject(new Error('presence unavailable'))
+      : { plugins: [] })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <PluginsCard names={['nvidia-app']} onContinue={vi.fn()} />
+    </QueryClientProvider>
+  )
+  expect((await screen.findByRole('alert')).textContent).toContain('presence unavailable')
+  routedRequest.mockImplementation(async (_connection, _profile, _method, params) =>
+    params.action === 'presence'
+      ? { presence: [{ name: 'nvidia-app', title: 'NVIDIA App', state: 'missing_app' }] }
+      : { plugins: [] })
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByRole('button', { name: /NVIDIA App/ })).toBeTruthy()
 })

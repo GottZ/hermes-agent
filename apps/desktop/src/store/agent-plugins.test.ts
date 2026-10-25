@@ -6,6 +6,7 @@ import {
   $agentPluginsByOwner,
   $agentPluginsConnectionId,
   $agentPluginsErrorByOwner,
+  $agentPluginsLoadingByOwner,
   $agentPluginsProfile,
   type AgentPluginRow,
   installAgentPlugin,
@@ -27,6 +28,7 @@ afterEach(() => {
   $agentPluginsConnectionId.set(undefined)
   $agentPluginsByOwner.set({})
   $agentPluginsErrorByOwner.set({})
+  $agentPluginsLoadingByOwner.set({})
 })
 
 describe('loadAgentPlugins connection ownership', () => {

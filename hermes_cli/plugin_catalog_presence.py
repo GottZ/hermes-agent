@@ -155,6 +155,13 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
 def presence(entry: Any) -> Presence:
     """The app state of one catalog entry on this host. The worst server wins (missing, then not running)."""
     from hermes_cli.agent_plugins import _server_declarations
+    from hermes_cli.plugins_cmd_catalog import normalized_platforms
+    from hermes_platform.host.facts import os_family
+
+    here = os_family()
+    platforms = getattr(entry, "platforms", ())
+    if platforms and here not in normalized_platforms(platforms):
+        return Presence("missing_app", f"not supported on {here}", "unsupported_os")
 
     manifest = _pinned_manifest(entry.repo, entry.sha, entry.subdir)
     if not manifest:

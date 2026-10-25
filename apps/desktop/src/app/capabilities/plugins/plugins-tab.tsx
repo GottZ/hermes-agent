@@ -25,6 +25,7 @@ import {
   $agentPluginsByOwner,
   $agentPluginsError,
   $agentPluginsErrorByOwner,
+  $agentPluginsLoadingByOwner,
   $agentPluginsStatus,
   type AgentPluginRow,
   type AgentPluginServerState,
@@ -618,6 +619,7 @@ export const PluginsTab = memo(function PluginsTab({
   const agentRows = useStore($agentPlugins)
   const ownerInventories = useStore($agentPluginsByOwner)
   const ownerErrors = useStore($agentPluginsErrorByOwner)
+  const ownerLoading = useStore($agentPluginsLoadingByOwner)
   const status = useStore($agentPluginsStatus)
   const error = useStore($agentPluginsError)
   const gatewayState = useStore($gatewayState)
@@ -626,8 +628,7 @@ export const PluginsTab = memo(function PluginsTab({
   const scope = profileParam(profile)
   const label = scopeLabel ?? scope ?? t.skills.plugins.defaultProfile
   const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() || null : null
-  const ownerKey = connectionId ? `${connectionId}::${scope}` : null
-  const [loadingOwnerKey, setLoadingOwnerKey] = useState<string | null>(null)
+  const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
   const requestGateway = useMemo(
     () => pluginOwnerRequest(profile, ambientRequest),
     [ambientRequest, connectionId, scope]
@@ -637,16 +638,9 @@ export const PluginsTab = memo(function PluginsTab({
 
   useEffect(() => {
     if (gatewayState === 'open' || connectionId) {
-      if (ownerKey) {
-        setLoadingOwnerKey(ownerKey)
-      }
-      void loadAgentPlugins(requestGateway, scope, connectionId).finally(() => {
-        if (ownerKey) {
-          setLoadingOwnerKey(current => current === ownerKey ? null : current)
-        }
-      })
+      void loadAgentPlugins(requestGateway, scope, connectionId)
     }
-  }, [requestGateway, scope, connectionId, ownerKey, gatewayState])
+  }, [requestGateway, scope, connectionId, gatewayState])
 
   const packages = useMemo(
     () => mergePluginPackages(Object.values(desktopRecords), (ownRows ?? []).filter(isDesktopRelevantPlugin)),
@@ -824,7 +818,7 @@ export const PluginsTab = memo(function PluginsTab({
       headerActions={<PluginActions profile={profile} />}
       installedEntries={installedEntries}
       installedPending={connectionId
-        ? ownRows === undefined || Boolean(ownError) || loadingOwnerKey === ownerKey
+        ? ownRows === undefined || Boolean(ownError) || Boolean(ownerKey && ownerLoading[ownerKey])
         : status !== 'ready'}
       isInstalled={isInstalled}
       kind="plugins"

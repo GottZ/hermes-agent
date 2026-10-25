@@ -8,7 +8,8 @@ import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugi
 import { queryClient } from '@/lib/query-client'
 import {
   $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsErrorByOwner,
-  $agentPluginsProfile, $agentPluginsStatus
+  $agentPluginsLoadingByOwner,
+  $agentPluginsProfile, $agentPluginsStatus, loadAgentPlugins
 } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $notifications } from '@/store/notifications'
@@ -113,6 +114,7 @@ beforeEach(() => {
   $agentPlugins.set([])
   $agentPluginsByOwner.set({})
   $agentPluginsErrorByOwner.set({})
+  $agentPluginsLoadingByOwner.set({})
   $agentPluginsConnectionId.set(undefined)
   $agentPluginsProfile.set(undefined)
   $agentPluginsStatus.set('ready')
@@ -429,6 +431,28 @@ describe('PluginsTab', () => {
     await screen.findByText('owner list unavailable')
     expect((screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })).disabled).toBe(true)
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+  })
+
+  it('disables catalog Install while a cached owner inventory is manually refreshed', async () => {
+    seedCatalog()
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    const install = await screen.findByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
+    await waitFor(() => expect(install.disabled).toBe(false))
+
+    let finish!: (value: { plugins: unknown[] }) => void
+    routedRequest.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    let pending!: Promise<void>
+    act(() => {
+      pending = loadAgentPlugins((method, params) =>
+        routedRequest('local', 'workbot', method, params) as never, 'workbot', 'local')
+    })
+    expect(install.disabled).toBe(true)
+    await act(async () => {
+      finish({ plugins: [] })
+      await pending
+    })
+    expect(install.disabled).toBe(false)
   })
 
   it('does not freeze Install when another surface later loads a foreign owner', async () => {

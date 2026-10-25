@@ -115,6 +115,8 @@ export const $agentPluginsConnectionId = atom<null | string | undefined>(undefin
 export const $agentPluginsByOwner = atom<Record<string, AgentPluginRow[]>>({})
 /** A foreign list request must not erase this owner's failure signal. */
 export const $agentPluginsErrorByOwner = atom<Record<string, string | null>>({})
+/** Shared per-owner in-flight state also covers manual retry/rescan, not just page mount. */
+export const $agentPluginsLoadingByOwner = atom<Record<string, boolean>>({})
 export const pluginInventoryKey = (connectionId: string, profile: string | null) =>
   JSON.stringify([connectionId, profile])
 /** Best available address of the row whose toggle RPC is in flight. */
@@ -153,7 +155,9 @@ const ownerGenerations = new Map<string, number>()
 function invalidateListForMutation(profile: string | null | undefined, connectionId: string | null) {
   const scope = profile ?? null
   if (connectionId) {
-    ownerGenerations.delete(pluginInventoryKey(connectionId, scope))
+    const key = pluginInventoryKey(connectionId, scope)
+    ownerGenerations.delete(key)
+    $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [key]: false })
   }
   if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
     ++loadGeneration
@@ -189,6 +193,7 @@ export function loadAgentPlugins(
   if (ownerKey) {
     ownerGenerations.set(ownerKey, generation)
     $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
+    $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [ownerKey]: true })
   }
 
   inflightProfile = scope
@@ -236,6 +241,9 @@ export function loadAgentPlugins(
       $agentPluginsError.set(e instanceof Error ? e.message : String(e))
       $agentPluginsStatus.set('error')
     } finally {
+      if (ownerKey && ownerGenerations.get(ownerKey) === generation) {
+        $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [ownerKey]: false })
+      }
       if (generation === loadGeneration) {
         inflight = null
         inflightProfile = null

@@ -108,14 +108,18 @@ def test_reviewed_link_does_not_name_a_different_declared_app(monkeypatch):
     result = presence.app_guidance(reviewed, "missing_app")
     assert result["download_url"] is None
     assert result["app_title"] == "nvidia-app"
-    assert presence.presence(reviewed).sentence == "needs nvidia-app"
+    # Isolate the declaration-name check from the real catalog's Windows-only gate.
+    compatible = SimpleNamespace(**{**reviewed.__dict__, "platforms": []})
+    assert presence.presence(compatible).sentence == "needs nvidia-app"
 
 
 def test_missing_sibling_never_inherits_other_servers_vendor_link(monkeypatch):
     from hermes_cli import plugin_catalog as catalog
 
     reviewed = next(e for e in catalog.load_catalog() if e.name == "nvidia-app")
-    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [reviewed])
+    # Exercise sibling aggregation separately from the real Windows-only catalog gate.
+    compatible = SimpleNamespace(**{**reviewed.__dict__, "platforms": []})
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [compatible])
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: {"extensions": {
         "com.nousresearch.hermes": {"servers": {
             "nvidia-app": {"app": {"win32": {"presence": "executable", "location": "C:/NVIDIA.exe"}},
