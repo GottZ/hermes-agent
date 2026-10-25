@@ -336,7 +336,8 @@ function AppGuidancePanel({
         ? copy.unreadableVersion(guidance.app_title, guidance.required_version)
         : copy.uncertain(guidance.app_title),
     app_not_running: () => copy.notRunning(guidance.app_title),
-    available: () => ''
+    available: () => '',
+    no_requirements: () => ''
   }[guidance.reason]()
 
   if (!description) {

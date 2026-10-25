@@ -27275,7 +27275,8 @@
           "version_too_old",
           "unsupported_os",
           "unsupported_gpu",
-          "uncertain"
+          "uncertain",
+          "no_requirements"
         ],
         "title": "PluginAppReason",
         "type": "string"

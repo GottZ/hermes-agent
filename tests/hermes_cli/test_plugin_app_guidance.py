@@ -267,6 +267,48 @@ def test_no_requirements_alone_remains_unknown(monkeypatch):
     found = presence._server_presence(_decl(), None, "NVIDIA App")
     assert found.state == "unknown" and found.reason == "no_requirements"
 
+
+def _github_entry(name):
+    from hermes_cli import plugin_catalog as catalog
+
+    return catalog.entry_from_mapping({
+        "name": name, "repo": f"https://github.com/fx/{name}", "sha": "0" * 40,
+        "description": f"{name} does things.", "maintainer": "fx", "tier": "community"}, name)
+
+
+def test_named_presence_reports_a_plugin_without_app_declaration_as_no_requirements(monkeypatch):
+    """The wire row, not just one server: the Desktop must not doubt an app nobody declared."""
+    from hermes_cli import plugin_catalog as catalog
+
+    entry = _github_entry("plain")
+    no_app = {"extensions": {"com.nousresearch.hermes": {"servers": {"srv": {"command": "srv"}}}}}
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [entry])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: no_app)
+    row, = presence.presence_for(["plain"])
+    assert row["reason"] == "no_requirements" and row["state"] == "unknown" and row["sentence"] == ""
+
+
+def test_pin_without_plugin_json_has_no_requirements_but_a_failed_read_stays_uncertain(monkeypatch):
+    """A 404 is a native plugin (the install gate skips it too); a network failure proves nothing."""
+    import httpx
+
+    from hermes_cli import plugin_catalog as catalog
+
+    entries = [_github_entry("native"), _github_entry("offline")]
+
+    def get(url, **_kwargs):
+        if "/fx/offline/" in url:
+            raise httpx.ConnectError("unreachable")
+        return SimpleNamespace(status_code=404, content=b"")
+
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: entries)
+    monkeypatch.setattr(presence, "_manifests", {})
+    monkeypatch.setattr(httpx, "get", get)
+    rows = {row["name"]: row for row in presence.presence_for(["native", "offline"])}
+    assert rows["native"]["reason"] == "no_requirements"
+    assert rows["offline"]["reason"] == "uncertain"
+
+
 def test_unreadable_installed_version_is_typed_non_looping_refusal(monkeypatch, tmp_path):
     from hermes_platform.resolver import availability as availability_mod
     from hermes_cli import agent_plugins

@@ -234,6 +234,33 @@ describe('A reviewed catalog pick', () => {
     expect(installButton().disabled).toBe(true)
   })
 
+  it('shows no app doubt for a plugin whose pin declares no app requirement', async () => {
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? {
+            presence: [
+              {
+                name: 'blender',
+                state: 'unknown',
+                sentence: '',
+                reason: 'no_requirements',
+                app_title: 'blender',
+                required_version: null,
+                found_version: null,
+                download_url: null,
+                target_host: 'backend'
+              }
+            ]
+          }
+        : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    await waitFor(() => expect(installButton().disabled).toBe(false))
+    expect(screen.queryByText(/Could not confirm/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ask Hermes for help' })).toBeNull()
+  })
+
   it('treats unsupported hardware as blocked without any vendor download', async () => {
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'

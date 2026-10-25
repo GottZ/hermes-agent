@@ -773,6 +773,7 @@ class PluginAppReason(WireEnum):
     unsupported_os = "unsupported_os"
     unsupported_gpu = "unsupported_gpu"
     uncertain = "uncertain"
+    no_requirements = "no_requirements"
 
 
 class OnboardingCatalogPlugin(Result):

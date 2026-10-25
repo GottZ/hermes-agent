@@ -3,7 +3,7 @@ import { JsonRpcGatewayError } from '@hermes/shared'
 import type { GatewayRequest } from './agent-plugins'
 
 export type AppBlockerReason = 'missing_app' | 'version_too_old' | 'unsupported_os' | 'unsupported_gpu'
-export type AppPresenceReason = AppBlockerReason | 'available' | 'app_not_running' | 'uncertain'
+export type AppPresenceReason = AppBlockerReason | 'available' | 'app_not_running' | 'no_requirements' | 'uncertain'
 
 export interface AppGuidance {
   reason: AppPresenceReason
@@ -21,6 +21,7 @@ const REASONS = new Set<AppPresenceReason>([
   'unsupported_gpu',
   'available',
   'app_not_running',
+  'no_requirements',
   'uncertain'
 ])
 

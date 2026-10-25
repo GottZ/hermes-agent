@@ -3,7 +3,8 @@
 A portable plugin declares its app in ``plugin.json`` (``extensions.com.nousresearch.hermes.servers``).
 The catalog pins the commit, so the declaration is read once per pin from the repo at that commit and
 judged by the same ``hermes_platform`` resolver the installer and the Plugins-tab pill use. Nothing is
-installed, spawned or connected. Any failure to read the declaration is ``unknown``, never a guess.
+installed, spawned or connected. Any failure to read the declaration is ``unknown``, never a guess;
+a pin without ``plugin.json`` (404) or without an app/GPU declaration is ``no_requirements``.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ _GITHUB = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)
 _TIMEOUT = 5.0
 _MAX_BYTES = 256 * 1024
 _DISCLOSURE = re.compile(r"\bDisclosure\s*[:\u2014]\s*(.+)")
-# (repo, sha, subdir) -> manifest dict, or None when the pin has no readable plugin.json. A pin is
-# immutable, so the process keeps the answer.
+# (repo, sha, subdir) -> manifest dict, or None when the pin has no plugin.json (404). A pin is
+# immutable, so the process keeps the answer; an unreadable or transient result is never cached.
 _manifests: dict[tuple[str, str, str], Optional[dict[str, Any]]] = {}
 
 
@@ -39,6 +40,9 @@ class Presence:
 
 
 UNKNOWN = Presence("unknown")
+# Nothing to check: no portable plugin.json at the pin (the installer gate skips those too) or no server
+# that declares an app or GPU. Distinct from UNKNOWN, which means the declaration could not be judged.
+NO_REQUIREMENTS = Presence("unknown", reason="no_requirements")
 
 def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None):
     """Only a catalog pin with the exact reviewed server app declaration may name a vendor."""
@@ -100,7 +104,9 @@ def _pinned_manifest(repo: str, sha: str, subdir: str) -> Optional[dict[str, Any
             resp = httpx.get(url, timeout=_TIMEOUT, follow_redirects=True)
             if resp.status_code == 200 and len(resp.content) <= _MAX_BYTES:
                 data = json.loads(resp.content)
-                manifest = data if isinstance(data, dict) else None
+                if not isinstance(data, dict):
+                    return None  # unreadable, not absent: presence must not read it as "no requirements"
+                manifest = data
             elif resp.status_code != 404:
                 return None  # transient: do not remember
         except Exception as exc:
@@ -165,10 +171,15 @@ def presence(entry: Any) -> Presence:
 
     manifest = _pinned_manifest(entry.repo, entry.sha, entry.subdir)
     if not manifest:
-        return UNKNOWN
+        # Only a 404 is remembered as None; a transient failure is not cached and stays unknown.
+        known_absent = (_raw_manifest_url(entry.repo, entry.sha, entry.subdir) is not None
+                        and (entry.repo, entry.sha, entry.subdir) in _manifests)
+        return NO_REQUIREMENTS if known_absent else UNKNOWN
     raw_servers = (manifest.get("extensions") or {}).get("com.nousresearch.hermes", {}).get("servers") or {}
-    if not isinstance(raw_servers, dict) or not raw_servers:
+    if not isinstance(raw_servers, dict):
         return UNKNOWN
+    if not raw_servers:
+        return NO_REQUIREMENTS
     try:
         declarations = _server_declarations(manifest, {name: {} for name in raw_servers})
     except Exception as exc:
@@ -188,7 +199,7 @@ def presence(entry: Any) -> Presence:
             "missing_app": 3, "version_too_old": 4, "app_not_running": 5,
             "available": 6}
     relevant = [p for p in found if p.reason != "no_requirements"]
-    return min(relevant, key=lambda p: rank[p.reason]) if relevant else UNKNOWN
+    return min(relevant, key=lambda p: rank[p.reason]) if relevant else NO_REQUIREMENTS
 
 
 def _onboarding_catalog() -> list:
