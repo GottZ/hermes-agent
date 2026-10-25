@@ -1,5 +1,4 @@
 name: game-editor
-app_server: game-editor
 repo: https://github.com/TakeshiTGAL/hermes-plugin-game-editor
 sha: 3a2b23e8a60714b4346b3d8f7c9c2a12b29718a8
 version: "1.2.3"

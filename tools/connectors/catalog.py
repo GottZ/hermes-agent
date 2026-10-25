@@ -319,9 +319,7 @@ def _plugin_row(entry: Any, label: Optional[str]) -> dict[str, Any]:
         "requires_hermes": entry.requires_hermes or None,
         "has_desktop_half": False,
         "target_profile": label,
-        # The entry is itself a live-catalog row (plugin_entry), so it is the catalog presence needs
-        # to confirm its reviewed annotation: no second full catalog load per card row.
-        "app_state": presence(entry, catalog=[entry]).state,
+        "app_state": presence(entry).state,
     }
     if entry.platforms:
         row["platforms"] = list(entry.platforms)

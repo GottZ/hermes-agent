@@ -116,8 +116,7 @@ class PluginCatalogEntry:
     readme: bool = False         # docs site renders the README from the pinned commit on the entry's page
     platforms: list[str] = field(default_factory=list)  # empty = all OSes
     title: str = ""              # human name ("NVIDIA App"); empty = derived from ``name``
-    app_download_url: str = ""  # reviewed HTTPS vendor URL, only surfaced for a pinned app declaration
-    app_server: str = ""        # exact plugin.json server whose app declaration the vendor link names
+    app_download_url: str = ""  # reviewed HTTPS vendor URL for the one app the pinned plugin.json declares
     onboarding: bool = False     # curated: offered on the desktop onboarding card
     capabilities: CatalogCapabilities = field(default_factory=CatalogCapabilities)
     known_issues: list[str] = field(default_factory=list)  # #124058: informational; drivers come from plugin-catalog/*.yaml
@@ -136,7 +135,7 @@ class PluginCatalogEntry:
             "subdir": self.subdir, "docs_url": self.docs_url, "version": self.version, "image": self.image,
             "screenshots": list(self.screenshots), "readme": self.readme,
             "platforms": list(self.platforms), "title": self.title,
-            "app_download_url": self.app_download_url, "app_server": self.app_server,
+            "app_download_url": self.app_download_url,
             "onboarding": self.onboarding,
             "capabilities": {
                 "provides_tools": list(caps.provides_tools), "provides_hooks": list(caps.provides_hooks),
@@ -201,9 +200,8 @@ def entry_from_mapping(data: Any, label: str) -> Optional[PluginCatalogEntry]:
         platforms=_str_list(data.get("platforms")),
         title=str(data.get("title") or "").strip(),
         app_download_url=(str(data.get("app_download_url") or "").strip()
-                          if data.get("title") and data.get("app_server")
-                          and is_safe_app_download_url(str(data.get("app_download_url") or "")) else ""),
-        app_server=str(data.get("app_server") or "").strip(),
+                          if data.get("title") and is_safe_app_download_url(str(data.get("app_download_url") or ""))
+                          else ""),
         onboarding=data.get("onboarding") is True,
         known_issues=_str_list(data.get("known_issues")),
         capabilities=CatalogCapabilities(
@@ -525,7 +523,7 @@ def load_catalog_live() -> list[PluginCatalogEntry]:
 # Curated display fields a published doc older than the field does not carry. ``generated_at`` is the
 # docs build time, not the content time, so a rebuild of an older catalog outranks a checkout that added
 # the field; a doc that has the key (even ``false``) decides.
-_CURATED_FIELDS = ("onboarding", "title", "app_download_url", "app_server")
+_CURATED_FIELDS = ("onboarding", "title", "app_download_url")
 
 
 def _with_curated_fields(live: PluginCatalogEntry, tree: Optional[PluginCatalogEntry], raw: dict[str, Any]

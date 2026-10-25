@@ -52,9 +52,11 @@ _OS_LABELS = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}
 
 def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None, *,
                   catalog: list | None = None):
-    """Only a catalog pin with the exact reviewed server app declaration may name a vendor.
+    """Only a catalog pin whose plugin.json declares exactly one app may name a vendor for it.
 
-    *catalog* is the caller's already-loaded live catalog; each load re-parses every in-tree entry."""
+    The link belongs to that one server; with several app servers a single link could name the
+    wrong one, so there is none. *catalog* is the caller's already-loaded live catalog; each load
+    re-parses every in-tree entry."""
     if not getattr(entry, "app_download_url", None):
         return None  # the match below needs a reviewed URL on both sides
     from hermes_cli.plugin_catalog import load_catalog_live
@@ -64,7 +66,6 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
                      and item.subdir == getattr(entry, "subdir", None)
                      and item.title == getattr(entry, "title", None)
                      and item.app_download_url == getattr(entry, "app_download_url", None)
-                     and item.app_server == getattr(entry, "app_server", None)
                      and item.app_download_url), None)
     if reviewed is None:
         return None
@@ -73,12 +74,12 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
         from hermes_cli.agent_plugins import _server_declarations
         servers = (manifest or {}).get("extensions", {}).get("com.nousresearch.hermes", {}).get("servers", {})
         declarations = _server_declarations(manifest, {name: {} for name in servers}) if manifest and isinstance(servers, dict) else {}
-        server = declarations.get(reviewed.app_server)
         app_servers = [name for name, candidate in declarations.items()
                        if candidate.declaration.requires_app and candidate.declaration.app is not None]
-        return reviewed if (server and (actual_declaration is None or server.declaration == actual_declaration)
-                            and reviewed.app_server in app_servers
-                            and (server_name == reviewed.app_server if server_name else len(app_servers) == 1)) else None
+        if len(app_servers) != 1 or (server_name and server_name != app_servers[0]):
+            return None
+        declared = declarations[app_servers[0]].declaration
+        return reviewed if actual_declaration is None or declared == actual_declaration else None
     except (TypeError, ValueError, AttributeError):
         return None
 
@@ -172,7 +173,7 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
         "app_not_running", f"{title} is not running", "app_not_running", available.min_version)
 
 
-def presence(entry: Any, *, catalog: list | None = None) -> Presence:
+def presence(entry: Any) -> Presence:
     """The app state of one catalog entry on this host. The worst server wins (missing, then not running)."""
     from hermes_cli.agent_plugins import _server_declarations
     from hermes_cli.plugins_cmd_catalog import normalized_platforms
@@ -199,17 +200,12 @@ def presence(entry: Any, *, catalog: list | None = None) -> Presence:
     except Exception as exc:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
-    reviewed = _reviewed_app(entry, entry.app_server, catalog=catalog) if getattr(entry, "app_server", None) else None
     app_servers = [name for name, d in declarations.items() if getattr(d.declaration, "app", None) is not None]
 
     def title_for(name: str) -> str:
-        if reviewed and name == reviewed.app_server:
-            return reviewed.title
-        # Unannotated, the catalog title still names a lone app ("Pay CLI"); next to another app it
-        # could misname the sibling, and an annotated entry off its reviewed pin names none.
-        if not getattr(entry, "app_server", None) and app_servers == [name]:
-            return getattr(entry, "title", "") or entry.name
-        return entry.name
+        # The catalog title names a lone app ("NVIDIA App", "Pay CLI"); next to another app it could
+        # misname the sibling, so the plugin name stands in. Only the vendor link needs a review.
+        return (getattr(entry, "title", "") or entry.name) if app_servers == [name] else entry.name
 
     try:
         found = [replace(_server_presence(d.declaration, d.liveness, title_for(name)),
@@ -245,7 +241,7 @@ def onboarding_entries() -> list[dict[str, Any]]:
     catalog = load_catalog_live()
     rows = []
     for entry in _onboarding_catalog(catalog):
-        found = presence(entry, catalog=catalog)
+        found = presence(entry)
         rows.append({
             "name": entry.name,
             "title": entry.title or entry.name,
@@ -275,7 +271,7 @@ def presence_for(names: list[str]) -> list[dict[str, Any]]:
         return []
     # Each manifest read is bounded by _TIMEOUT; in parallel the whole answer waits one timeout, not one per name.
     with ThreadPoolExecutor(max_workers=len(entries)) as pool:
-        found = list(pool.map(lambda entry: presence(entry, catalog=catalog), entries))
+        found = list(pool.map(presence, entries))
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
              "sentence": state.sentence, "disclosure": _disclosure(entry.description),
              **app_guidance(entry, state.reason, required_version=state.required_version,

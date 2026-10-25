@@ -75,7 +75,6 @@ KNOWN_KEYS = {
     "capabilities",
     "title",
     "app_download_url",
-    "app_server",
     "onboarding",
     "known_issues",
     "attested_binaries",
@@ -165,9 +164,8 @@ def _check_app_download_url(data: dict, errors: list[str]) -> None:
                      and not any(host == suffix or host.endswith("." + suffix) for suffix in _LOCAL_HOST_SUFFIXES))
         except ValueError:
             valid = False
-    if (not valid or not isinstance(data.get("title"), str) or not data["title"].strip()
-            or not isinstance(data.get("app_server"), str) or not data["app_server"].strip()):
-        errors.append("app_download_url requires a title, app_server, and direct HTTPS vendor hostname")
+    if not valid or not isinstance(data.get("title"), str) or not data["title"].strip():
+        errors.append("app_download_url requires a title and a direct HTTPS vendor hostname")
 
 
 def validate_entry(data: object) -> tuple[list[str], list[str]]:

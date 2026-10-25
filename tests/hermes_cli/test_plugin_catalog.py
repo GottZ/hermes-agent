@@ -41,13 +41,13 @@ def test_verified_tier_survives_load_and_unknown_tier_is_rejected(tmp_path):
     assert {e.name: e.tier for e in pc.load_catalog(tmp_path)} == {"vendor": "verified"}
 
 def test_vendor_download_metadata_round_trips_and_invalid_url_is_discarded():
-    entry = pc.entry_from_mapping(_entry(title="Paint Studio", app_server="paint",
-                                         app_download_url="https://paint.example/download"), "reviewed")
+    entry = pc.entry_from_mapping(_entry(title="Paint Studio", app_download_url="https://paint.example/download"),
+                                  "reviewed")
     assert entry.app_download_url == "https://paint.example/download"
     assert entry.to_dict()["app_download_url"] == "https://paint.example/download"
-    assert entry.to_dict()["app_server"] == "paint"
-    assert pc.entry_from_mapping(_entry(title="Paint Studio", app_download_url="https://paint.example/download"),
-                                 "unbound").app_download_url == ""
+    # A link needs the human app name it is offered under.
+    assert pc.entry_from_mapping(_entry(app_download_url="https://paint.example/download"),
+                                 "untitled").app_download_url == ""
     for bad in ("http://paint.example/download", "https://paint.example.evil.test@evil.test/path",
                 "https://127.0.0.1/download", "https://paint.example/has space"):
         invalid = pc.entry_from_mapping(_entry(app_download_url=bad), "untrusted")
@@ -75,7 +75,7 @@ def test_vendor_url_filter_matches_the_standalone_catalog_validator(url, safe):
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
     errors: list[str] = []
-    validator._check_app_download_url({"app_download_url": url, "title": "T", "app_server": "srv"}, errors)
+    validator._check_app_download_url({"app_download_url": url, "title": "T"}, errors)
     assert pc.is_safe_app_download_url(url) is safe
     assert (not errors) is safe
 
