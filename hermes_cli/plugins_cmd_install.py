@@ -867,7 +867,8 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
     on_disk = _catalog_install_on_disk(entry.name, ref) if entry is not None and not force else None
     if on_disk is not None and entry is not None:
         installed = catalog.catalog_install_record(on_disk[0])
-        at_reviewed_pin = at_reviewed_pin and bool(installed) and installed.get("sha") == entry.sha
+        # Same pin rule as updates: commit or annotated-tag pin, case-insensitive.
+        at_reviewed_pin = at_reviewed_pin and bool(installed) and catalog.at_catalog_pin(installed, entry.sha.lower())
         try:
             _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], None)
         except _pc().PluginOperationError as exc:

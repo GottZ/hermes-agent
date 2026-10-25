@@ -661,3 +661,31 @@ def test_connector_card_row_judges_presence_without_reloading_the_catalog(monkey
     row = _plugin_row(reviewed, None)
     assert row["app_state"] == "missing_app"
     assert loads == []
+
+
+@pytest.mark.parametrize("record,at_pin", [
+    ({"sha": "0" * 40}, True),
+    ({"sha": "0" * 40, "pin": ""}, True),
+    ({"sha": "c" * 40, "pin": "0" * 40}, True),   # annotated tag: peeled commit + verified tag object
+    ({"sha": "b" * 40}, False),
+])
+def test_disabled_tree_retry_uses_the_catalog_pin_rule(monkeypatch, tmp_path, record, at_pin):
+    from hermes_cli import plugins_cmd_catalog
+
+    entry = SimpleNamespace(**{**_entry().__dict__, "sha": "0" * 40})
+    (tmp_path / "plugin.json").write_text("{}")
+    monkeypatch.setattr(install, "_catalog_install_on_disk", lambda *_: (tmp_path, {}, "nvidia-app"))
+    monkeypatch.setattr(plugins_cmd_catalog, "catalog_install_record", lambda *_: record)
+
+    def refused(name, tree, title):
+        error = PluginOperationError("app unavailable", failure_class="incompatible")
+        error.app_guidance = {"reason": "missing_app", "app_title": name, "required_version": None,
+                              "found_version": None, "download_url": None, "target_host": "backend"}
+        raise error
+
+    seen = {}
+    monkeypatch.setattr(install, "_refuse_unavailable_portable_plugin", refused)
+    monkeypatch.setattr(install, "_app_refusal_result", lambda exc, ent, *, at_reviewed_pin: seen.update(
+        at_pin=at_reviewed_pin) or {"ok": False})
+    install._place_tree(entry, "source", force=False, ref=None, assume_deps_consent=True, step=lambda *_: None)
+    assert seen["at_pin"] is at_pin
