@@ -5,6 +5,7 @@ import {
   $agentPlugins,
   $agentPluginsByOwner,
   $agentPluginsConnectionId,
+  $agentPluginsErrorByOwner,
   $agentPluginsProfile,
   type AgentPluginRow,
   installAgentPlugin,
@@ -12,7 +13,9 @@ import {
   loadAgentPlugins,
   normalizeAgentPluginRow,
   pluginInventoryKey,
-  saveAgentPluginSettings
+  saveAgentPluginSettings,
+  toggleAgentPlugin,
+  updateAgentPlugin
 } from './agent-plugins'
 
 const row = (partial: Partial<AgentPluginRow>): AgentPluginRow =>
@@ -23,6 +26,7 @@ afterEach(() => {
   $agentPluginsProfile.set(undefined)
   $agentPluginsConnectionId.set(undefined)
   $agentPluginsByOwner.set({})
+  $agentPluginsErrorByOwner.set({})
 })
 
 describe('loadAgentPlugins connection ownership', () => {
@@ -44,6 +48,45 @@ describe('loadAgentPlugins connection ownership', () => {
       .toEqual(['cloud-plugin'])
     expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')].map(item => item.key))
       .toEqual(['local-plugin'])
+  })
+
+  it('does not let a pre-toggle list response undo a completed owner mutation', async () => {
+    let finish!: (value: { plugins: AgentPluginRow[] }) => void
+    const original = row({ key: 'weather', status: 'disabled' })
+    $agentPlugins.set([original])
+    $agentPluginsProfile.set('workbot')
+    $agentPluginsConnectionId.set('local')
+    $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [original] })
+    const list = loadAgentPlugins(vi.fn(() => new Promise(resolve => { finish = resolve })) as never, 'workbot', 'local')
+    const updated = row({ key: 'weather', status: 'enabled' })
+    const ok = await toggleAgentPlugin(vi.fn(async () => ({ ok: true, plugin: updated })) as never,
+      'weather', true, 'failed', 'workbot', 'local')
+    expect(ok).toBe(true)
+    finish({ plugins: [original] })
+    await list
+    expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')][0].status).toBe('enabled')
+    expect($agentPlugins.get()[0].status).toBe('enabled')
+  })
+
+  it('retains owner A list failure even when owner B refreshes first', async () => {
+    let failA!: (reason: Error) => void
+    const a = loadAgentPlugins(vi.fn(() => new Promise((_resolve, reject) => { failA = reject })) as never,
+      'workbot', 'cloud')
+    await loadAgentPlugins(vi.fn(async () => ({ plugins: [] })) as never, 'workbot', 'local')
+    failA(new Error('cloud is unreachable'))
+    await a
+    expect($agentPluginsErrorByOwner.get()[pluginInventoryKey('cloud', 'workbot')]).toBe('cloud is unreachable')
+    expect($agentPluginsErrorByOwner.get()[pluginInventoryKey('local', 'workbot')]).toBeNull()
+  })
+
+  it('refreshes the same owner cache after update rather than stamping a shared null owner', async () => {
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === 'update' ? { ok: true } : { plugins: [row({ key: 'weather', version: '2' })] })
+    $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [row({ key: 'weather', version: '1' })] })
+    const result = await updateAgentPlugin(request as never, 'weather', 'failed', 'workbot', {}, 'local')
+    expect(result.kind).toBe('applied')
+    expect($agentPluginsConnectionId.get()).toBe('local')
+    expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')][0].version).toBe('2')
   })
 })
 

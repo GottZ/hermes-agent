@@ -24,6 +24,7 @@ import {
   $agentPlugins,
   $agentPluginsByOwner,
   $agentPluginsError,
+  $agentPluginsErrorByOwner,
   $agentPluginsStatus,
   type AgentPluginRow,
   type AgentPluginServerState,
@@ -35,6 +36,7 @@ import {
   toggleAgentPlugin
 } from '@/store/agent-plugins'
 import { confirm } from '@/store/confirm'
+import { registryConnectionKind } from '@/store/connection-registry-state'
 import { notify, notifyError } from '@/store/notifications'
 import { openCatalogPluginInstall } from '@/store/plugin-catalog-install'
 import { openPluginInstallRequest } from '@/store/plugin-install-request'
@@ -65,6 +67,14 @@ function profileParam(scope: ProfileScope): null | string {
   }
 
   return typeof scope === 'string' ? scope : (scope.profile ?? null)
+}
+
+/** The desktop-half reconciler is local to Electron, not to the foreground chat. */
+function isRemotePluginOwner(profile: ProfileScope, foregroundRemote: boolean): boolean {
+  const connectionId = profile && typeof profile === 'object' ? profile.connectionId?.trim() : null
+  return connectionId
+    ? connectionId !== 'local' && registryConnectionKind(connectionId) !== 'local'
+    : foregroundRemote
 }
 
 function reveal(file: string) {
@@ -323,7 +333,8 @@ function PackageRow({
   const desktopRemovable = desktop?.kind === 'disk' && !desktop.packageName && !agent
   // Electron's desktop-half reconcile only walks THIS machine's homes, so a
   // package installed on a remote backend can never materialize here (#114079).
-  const remoteBackend = useStore($connection)?.mode === 'remote'
+  const foregroundConnection = useStore($connection)
+  const remoteBackend = isRemotePluginOwner(profile, foregroundConnection?.mode === 'remote')
 
   // #96969: when the feature's agent-side tools live in a toolset (the
   // built-in Kanban board has no agent-plugin half), the Desktop switch flips
@@ -606,6 +617,7 @@ export const PluginsTab = memo(function PluginsTab({
   const desktopRecords = useStore($pluginRecords)
   const agentRows = useStore($agentPlugins)
   const ownerInventories = useStore($agentPluginsByOwner)
+  const ownerErrors = useStore($agentPluginsErrorByOwner)
   const status = useStore($agentPluginsStatus)
   const error = useStore($agentPluginsError)
   const gatewayState = useStore($gatewayState)
@@ -621,6 +633,7 @@ export const PluginsTab = memo(function PluginsTab({
     [ambientRequest, connectionId, scope]
   )
   const ownRows = connectionId ? ownerInventories[pluginInventoryKey(connectionId, scope)] : agentRows
+  const ownError = connectionId ? ownerErrors[pluginInventoryKey(connectionId, scope)] : error
 
   useEffect(() => {
     if (gatewayState === 'open' || connectionId) {
@@ -696,6 +709,11 @@ export const PluginsTab = memo(function PluginsTab({
 
     for (const entry of installedEntries) {
       const pkg = packageById.get(entry.id)
+      // A Desktop half is app-wide, not evidence that this selected backend
+      // has the Agent half. Keep catalog Install available for that owner.
+      if (pkg?.agentMissingInProfile) {
+        continue
+      }
       const name = pkg?.agent?.catalog_name ?? pkg?.desktop?.packageOrigin?.catalogName
 
       if (name) {
@@ -791,13 +809,13 @@ export const PluginsTab = memo(function PluginsTab({
   }
 
   const notice =
-    status === 'error' ? (
+    (connectionId ? Boolean(ownError) : status === 'error') ? (
       <CatalogAlert
         onRetry={() => void loadAgentPlugins(requestGateway, scope, connectionId)}
         retryLabel={t.catalog.retry}
         title={p.loadFailed}
       >
-        {error}
+        {ownError}
       </CatalogAlert>
     ) : null
 
@@ -805,14 +823,23 @@ export const PluginsTab = memo(function PluginsTab({
     <CatalogBrowser
       headerActions={<PluginActions profile={profile} />}
       installedEntries={installedEntries}
-      installedPending={status === 'loading' || (ownerKey !== null && loadingOwnerKey === ownerKey)}
+      installedPending={connectionId
+        ? ownRows === undefined || Boolean(ownError) || loadingOwnerKey === ownerKey
+        : status !== 'ready'}
       isInstalled={isInstalled}
       kind="plugins"
       matchInstalled={matchInstalled}
       notice={notice}
       // A plugin row's `source` IS its catalog tier (catalog-data.ts::catalogEntry);
       // CatalogEntry has no `tier` field, so don't "fix" this to entry.tier.
-      onInstall={entry => openCatalogPluginInstall(entry, profile, { tier: entry.source })}
+      onInstall={entry => {
+        const missingAgentHalf = packages.some(pkg =>
+          pkg.agentMissingInProfile && pkg.desktop?.packageOrigin?.catalogName === entry.name)
+        openCatalogPluginInstall(entry, profile, {
+          tier: entry.source,
+          ...(missingAgentHalf ? { legacyHint: 'agent' as const } : {})
+        })
+      }}
       onQueryChange={onQueryChange}
       query={query}
       renderInstalledAction={entry => {
@@ -850,7 +877,7 @@ export const PluginsTab = memo(function PluginsTab({
               })
             }}
             onAgentUpdate={row => {
-              void runPluginUpdate(requestGateway, row, scope, p).then(outcome => {
+              void runPluginUpdate(requestGateway, row, scope, p, connectionId).then(outcome => {
                 if (outcome.kind === 'applied') {
                   void rescanAll(requestGateway, scope, connectionId)
                 }

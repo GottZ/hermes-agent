@@ -15,7 +15,7 @@ import { openPluginInstallRequest, type PluginInstallRequest } from './plugin-in
 export function openCatalogPluginInstall(
   entry: PluginCatalogEntry,
   profile: ProfileScope,
-  options: Pick<PluginInstallRequest, 'stayAfterInstall' | 'tier' | 'title'> = {}
+  options: Pick<PluginInstallRequest, 'legacyHint' | 'stayAfterInstall' | 'tier' | 'title'> = {}
 ): void {
   // The shared inventory has only a profile label, not a connection owner.
   // Never treat another backend's matching row as proof this owner has the plugin.

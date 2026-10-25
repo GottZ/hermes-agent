@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugin } from '@/contrib/plugins-store'
 import { queryClient } from '@/lib/query-client'
 import {
-  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsProfile, $agentPluginsStatus
+  $agentPlugins, $agentPluginsByOwner, $agentPluginsConnectionId, $agentPluginsErrorByOwner,
+  $agentPluginsProfile, $agentPluginsStatus
 } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $notifications } from '@/store/notifications'
@@ -111,6 +112,7 @@ beforeEach(() => {
   $pluginRecords.set({})
   $agentPlugins.set([])
   $agentPluginsByOwner.set({})
+  $agentPluginsErrorByOwner.set({})
   $agentPluginsConnectionId.set(undefined)
   $agentPluginsProfile.set(undefined)
   $agentPluginsStatus.set('ready')
@@ -242,6 +244,20 @@ describe('PluginsTab', () => {
     expect(detail.queryByText('copying…')).toBeNull()
   })
 
+  it.each([
+    ['cloud', 'local', 'unavailable (remote backend)'],
+    ['local', 'remote', 'copying…']
+  ])('locates a missing desktop half on selected %s rather than foreground %s', async (connectionId, foreground, expected) => {
+    $connection.set({ ...connectionFixture, mode: foreground as 'local' | 'remote' })
+    routedRequest.mockResolvedValue({ plugins: [{
+      description: '', has_desktop_half: true, key: 'nous-prices', name: 'nous-prices',
+      source: 'catalog', status: 'enabled', version: '1'
+    }] })
+    renderPlugins({ profile: { connectionId, profile: 'workbot' } })
+    const detail = within(await screen.findByRole('row', { name: /^nous-prices/ }))
+    expect(detail.getByText(expected)).toBeTruthy()
+  })
+
   it('keeps the pending desktop-half state on a local backend', () => {
     $agentPlugins.set([
       {
@@ -331,6 +347,7 @@ describe('PluginsTab', () => {
     })
 
     renderPlugins({ profile: 'workbot', scopeLabel: 'workbot' })
+    fireEvent.click(screen.getByRole('button', { name: 'Media Studio' }))
     screen.getByRole('button', { name: 'Install here' }).click()
 
     await waitFor(() => {
@@ -384,6 +401,34 @@ describe('PluginsTab', () => {
     expect(requestGateway.mock.calls.some(([, params]) => params?.action === 'list')).toBe(false)
     fireEvent.click(install)
     expect($pluginInstallRequest.get()?.profile).toEqual({ connectionId: 'local', profile: 'workbot' })
+  })
+
+  it('offers catalog Install for an agent half missing on the selected owner despite a desktop half', async () => {
+    seedCatalog()
+    $pluginRecords.set({ weather: {
+      id: 'weather', name: weatherEntry.name, kind: 'disk', status: 'loaded',
+      packageName: weatherEntry.name,
+      packageOrigin: { catalogName: weatherEntry.name, repo: weatherEntry.repo, sha: weatherEntry.sha }
+    } })
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    const install = await screen.findByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })
+    await waitFor(() => expect(install.disabled).toBe(false))
+    fireEvent.click(install)
+    expect($pluginInstallRequest.get()).toMatchObject({
+      catalogName: weatherEntry.name, legacyHint: 'agent',
+      profile: { connectionId: 'local', profile: 'workbot' }
+    })
+  })
+
+  it('keeps Install disabled and offers Retry when the selected owner inventory cannot be read', async () => {
+    seedCatalog()
+    routedRequest.mockRejectedValue(new Error('owner list unavailable'))
+    renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
+    await selectCatalogEntry(weatherEntry.name)
+    await screen.findByText('owner list unavailable')
+    expect((screen.getByRole<HTMLButtonElement>('button', { name: `Install ${weatherEntry.name}` })).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 
   it('does not freeze Install when another surface later loads a foreign owner', async () => {

@@ -113,6 +113,8 @@ export const $agentPluginsProfile = atom<null | string | undefined>(undefined)
 export const $agentPluginsConnectionId = atom<null | string | undefined>(undefined)
 /** Owner-specific snapshots survive another surface refreshing a different backend's shared list. */
 export const $agentPluginsByOwner = atom<Record<string, AgentPluginRow[]>>({})
+/** A foreign list request must not erase this owner's failure signal. */
+export const $agentPluginsErrorByOwner = atom<Record<string, string | null>>({})
 export const pluginInventoryKey = (connectionId: string, profile: string | null) =>
   JSON.stringify([connectionId, profile])
 /** Best available address of the row whose toggle RPC is in flight. */
@@ -147,6 +149,20 @@ let inflightConnectionId: string | null = null
 let loadGeneration = 0
 const ownerGenerations = new Map<string, number>()
 
+/** Invalidate a pre-mutation list without invalidating another owner's cache. */
+function invalidateListForMutation(profile: string | null | undefined, connectionId: string | null) {
+  const scope = profile ?? null
+  if (connectionId) {
+    ownerGenerations.delete(pluginInventoryKey(connectionId, scope))
+  }
+  if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
+    ++loadGeneration
+    inflight = null
+    inflightProfile = null
+    inflightConnectionId = null
+  }
+}
+
 /** Scope a `plugins.manage` payload to a profile. Omitted (null) = the
  *  backend's launch profile — older backends ignore the extra param. */
 const withProfile = (params: Record<string, unknown>, profile?: string | null) =>
@@ -172,6 +188,7 @@ export function loadAgentPlugins(
   const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
   if (ownerKey) {
     ownerGenerations.set(ownerKey, generation)
+    $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
   }
 
   inflightProfile = scope
@@ -188,8 +205,12 @@ export function loadAgentPlugins(
       )
 
       const rows = (result?.plugins ?? []).map(normalizeAgentPluginRow)
-      if (ownerKey && ownerGenerations.get(ownerKey) === generation) {
+      if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
+        return
+      }
+      if (ownerKey) {
         $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: rows })
+        $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
       }
       if (generation !== loadGeneration) {
         return
@@ -201,6 +222,13 @@ export function loadAgentPlugins(
       $agentPluginsStatus.set('ready')
       $agentPluginsError.set(null)
     } catch (e) {
+      if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
+        return
+      }
+      if (ownerKey) {
+        $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(),
+          [ownerKey]: e instanceof Error ? e.message : String(e) })
+      }
       if (generation !== loadGeneration) {
         return
       }
@@ -254,13 +282,16 @@ export async function toggleAgentPlugin(
     }
 
     const refreshed = result.plugin
+    invalidateListForMutation(profile, connectionId)
 
     // Patch only a list loaded for the profile this toggle targeted.
-    if (refreshed && $agentPluginsProfile.get() === (profile ?? null)
-        && $agentPluginsConnectionId.get() === connectionId) {
+    if (refreshed) {
       const snapshot = normalizeAgentPluginRow(refreshed)
 
-      $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
+      if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
+        $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
+        $agentPluginsStatus.set('ready')
+      }
       if (connectionId) {
         const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
         const owned = $agentPluginsByOwner.get()[ownerKey]
@@ -437,7 +468,8 @@ export async function updateAgentPlugin(
   name: string,
   failMessage: string,
   profile?: string | null,
-  options: AgentPluginUpdateOptions = {}
+  options: AgentPluginUpdateOptions = {},
+  connectionId: string | null = null
 ): Promise<AgentPluginUpdateOutcome> {
   $agentPluginBusy.set(name)
 
@@ -475,7 +507,8 @@ export async function updateAgentPlugin(
       throw new Error(failMessage)
     }
 
-    await loadAgentPlugins(request, profile)
+    invalidateListForMutation(profile, connectionId)
+    await loadAgentPlugins(request, profile, connectionId)
 
     return { kind: result.unchanged ? 'unchanged' : 'applied' }
   } catch (e) {
@@ -506,6 +539,8 @@ export async function removeAgentPlugin(
     if (!result?.ok) {
       throw new Error(failMessage)
     }
+
+    invalidateListForMutation(profile, connectionId)
 
     if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
       $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
