@@ -121,8 +121,7 @@ describe('installAgentPlugin', () => {
       reason: 'version_too_old',
       app_title: 'Godot 4',
       required_version: '4.3',
-      found_version: '4.2',
-      target_host: 'backend'
+      found_version: '4.2'
     }
 
     const request = vi.fn(async () => {

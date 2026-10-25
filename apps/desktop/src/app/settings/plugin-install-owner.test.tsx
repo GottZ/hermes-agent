@@ -25,9 +25,7 @@ vi.mock('@/hermes', async original => ({
     request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
       if (params.action === 'presence') {
         return {
-          presence: [
-            { name: 'weather-plugin', reason: presenceReason, app_title: 'Weather App', target_host: 'backend' }
-          ]
+          presence: [{ name: 'weather-plugin', reason: presenceReason, app_title: 'Weather App' }]
         }
       }
 

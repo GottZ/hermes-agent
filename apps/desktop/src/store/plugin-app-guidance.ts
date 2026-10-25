@@ -11,7 +11,6 @@ export interface AppGuidance {
   required_version?: string | null
   found_version?: string | null
   download_url?: string | null
-  target_host: 'backend'
 }
 
 const REASONS = new Set<AppPresenceReason>([
@@ -33,7 +32,6 @@ function parseAppGuidance(value: unknown): AppGuidance | null {
   const data = value as Record<string, unknown>
 
   if (
-    data.target_host !== 'backend' ||
     typeof data.app_title !== 'string' ||
     !data.app_title.trim() ||
     typeof data.reason !== 'string' ||
@@ -45,7 +43,6 @@ function parseAppGuidance(value: unknown): AppGuidance | null {
   return {
     reason: data.reason as AppPresenceReason,
     app_title: data.app_title,
-    target_host: 'backend',
     required_version: typeof data.required_version === 'string' ? data.required_version : null,
     found_version: typeof data.found_version === 'string' ? data.found_version : null,
     download_url: typeof data.download_url === 'string' ? data.download_url : null
@@ -81,7 +78,7 @@ export async function presenceForCatalogPlugin(
 
     const row = result.presence.find(candidate => candidate?.name === name)
 
-    return parseAppGuidance(row) ?? { reason: 'uncertain', app_title: name, target_host: 'backend' }
+    return parseAppGuidance(row) ?? { reason: 'uncertain', app_title: name }
   } catch (error) {
     if (
       error instanceof JsonRpcGatewayError &&
@@ -91,7 +88,7 @@ export async function presenceForCatalogPlugin(
     }
 
     // A failed read cannot assert a missing application; offer an honest uncertain state.
-    return { reason: 'uncertain', app_title: name, target_host: 'backend' }
+    return { reason: 'uncertain', app_title: name }
   }
 }
 
@@ -105,7 +102,6 @@ export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
   const value = guidance.download_url
 
   if (
-    guidance.target_host !== 'backend' ||
     !['missing_app', 'version_too_old'].includes(guidance.reason) ||
     !value ||
     Array.from(value).some(char => /\s/.test(char) || char.charCodeAt(0) < 32) ||

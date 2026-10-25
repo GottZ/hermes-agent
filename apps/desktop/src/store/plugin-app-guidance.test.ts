@@ -12,8 +12,7 @@ import {
 const missing = {
   reason: 'missing_app',
   app_title: 'Godot 4',
-  download_url: 'https://godotengine.org/download/macos/',
-  target_host: 'backend'
+  download_url: 'https://godotengine.org/download/macos/'
 } as const
 
 describe('catalog app preflight', () => {
@@ -40,10 +39,9 @@ describe('catalog app preflight', () => {
     expect(PRESENCE_TIMEOUT_MS).toBeLessThan(120_000)
     expect(await presenceForCatalogPlugin(request as never, 'game-editor', 'default')).toEqual({
       reason: 'uncertain',
-      app_title: 'game-editor',
-      target_host: 'backend'
+      app_title: 'game-editor'
     })
-    expect(isAppBlocked({ reason: 'uncertain', app_title: 'game-editor', target_host: 'backend' })).toBe(false)
+    expect(isAppBlocked({ reason: 'uncertain', app_title: 'game-editor' })).toBe(false)
   })
 
   it('treats older backend method errors as unsupported and missing rows as uncertain', async () => {
@@ -58,7 +56,7 @@ describe('catalog app preflight', () => {
     ).toBeNull()
     expect(
       await presenceForCatalogPlugin(vi.fn(async () => ({ presence: [] })) as never, 'game-editor', 'default')
-    ).toEqual({ reason: 'uncertain', app_title: 'game-editor', target_host: 'backend' })
+    ).toEqual({ reason: 'uncertain', app_title: 'game-editor' })
     expect(
       await presenceForCatalogPlugin(
         vi.fn(async () => {
@@ -67,7 +65,7 @@ describe('catalog app preflight', () => {
         'game-editor',
         'default'
       )
-    ).toEqual({ reason: 'uncertain', app_title: 'game-editor', target_host: 'backend' })
+    ).toEqual({ reason: 'uncertain', app_title: 'game-editor' })
   })
 
   it('accepts typed install refusal only from the gateway code and backend host', () => {
@@ -77,7 +75,7 @@ describe('catalog app preflight', () => {
     expect(appGuidanceFromError(new JsonRpcGatewayError('refused', { code: 5000, data: missing }))).toBeNull()
     expect(
       appGuidanceFromError(
-        new JsonRpcGatewayError('refused', { code: 5026, data: { ...missing, target_host: 'desktop' } })
+        new JsonRpcGatewayError('refused', { code: 5026, data: { ...missing, reason: 'not-a-reason' } })
       )
     ).toBeNull()
   })

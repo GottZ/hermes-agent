@@ -793,7 +793,6 @@ class OnboardingCatalogPlugin(Result):
     required_version: str | None
     found_version: str | None
     download_url: str | None
-    target_host: str
 
 
 class CatalogPluginPresence(Result):
@@ -811,7 +810,6 @@ class CatalogPluginPresence(Result):
     required_version: str | None
     found_version: str | None
     download_url: str | None
-    target_host: str
 
 
 class PluginScanFinding(Result):

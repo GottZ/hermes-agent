@@ -113,7 +113,7 @@ describe('A reviewed catalog pick', () => {
   it('requests a fresh chat even when help targets the already active profile', async () => {
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'
-        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
+        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender' }] }
         : { plugins: [] }
     )
     renderFlow()
@@ -127,7 +127,7 @@ describe('A reviewed catalog pick', () => {
   it('only drafts backend-scoped help after the user asks, never submits or downloads', async () => {
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'
-        ? { presence: [{ name: 'game-editor', reason: 'missing_app', app_title: 'Godot 4', target_host: 'backend' }] }
+        ? { presence: [{ name: 'game-editor', reason: 'missing_app', app_title: 'Godot 4' }] }
         : { plugins: [] }
     )
     renderFlow()
@@ -158,7 +158,6 @@ describe('A reviewed catalog pick', () => {
                 name: 'game-editor',
                 reason: available ? 'available' : 'missing_app',
                 app_title: 'Godot 4',
-                target_host: 'backend',
                 download_url: available ? null : 'https://godotengine.org/download/macos/'
               }
             ]
@@ -199,7 +198,7 @@ describe('A reviewed catalog pick', () => {
       checksA += 1
 
       return checksA === 1
-        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
+        ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender' }] }
         : recheckA.promise
     })
 
@@ -219,7 +218,7 @@ describe('A reviewed catalog pick', () => {
 
     await act(async () => {
       checkB.resolve({
-        presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }]
+        presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender' }]
       })
       await checkB.promise
     })
@@ -228,7 +227,7 @@ describe('A reviewed catalog pick', () => {
 
     await act(async () => {
       recheckA.resolve({
-        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }]
+        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender' }]
       })
       await recheckA.promise
     })
@@ -248,7 +247,7 @@ describe('A reviewed catalog pick', () => {
     expect(installButton().disabled).toBe(true)
     await act(async () => {
       check.resolve({
-        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }]
+        presence: [{ name: 'blender', reason: 'available', app_title: 'Blender' }]
       })
       await check.promise
     })
@@ -260,7 +259,7 @@ describe('A reviewed catalog pick', () => {
     const install = deferred<unknown>()
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'
-        ? { presence: [{ name: 'blender', reason: 'app_not_running', app_title: 'Blender', target_host: 'backend' }] }
+        ? { presence: [{ name: 'blender', reason: 'app_not_running', app_title: 'Blender' }] }
         : params?.action === 'install'
           ? install.promise
           : { plugins: [] }
@@ -294,8 +293,7 @@ describe('A reviewed catalog pick', () => {
                 app_title: 'blender',
                 required_version: null,
                 found_version: null,
-                download_url: null,
-                target_host: 'backend'
+                download_url: null
               }
             ]
           }
@@ -317,7 +315,6 @@ describe('A reviewed catalog pick', () => {
                 name: 'nvidia-app',
                 reason: 'unsupported_gpu',
                 app_title: 'NVIDIA App',
-                target_host: 'backend',
                 download_url: 'https://www.nvidia.com/en-us/software/nvidia-app/'
               }
             ]
@@ -341,8 +338,7 @@ describe('A reviewed catalog pick', () => {
                 reason: 'uncertain',
                 app_title: 'Blender',
                 required_version: '4.3',
-                found_version: null,
-                target_host: 'backend'
+                found_version: null
               }
             ]
           }
@@ -359,7 +355,7 @@ describe('A reviewed catalog pick', () => {
   it('shows typed post-preflight refusal as app guidance and does not retry blindly', async () => {
     requestGateway.mockImplementation(async (_method, params) => {
       if (params?.action === 'presence') {
-        return { presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }] }
+        return { presence: [{ name: 'blender', reason: 'available', app_title: 'Blender' }] }
       }
 
       if (params?.action === 'install') {
@@ -369,8 +365,7 @@ describe('A reviewed catalog pick', () => {
             reason: 'version_too_old',
             app_title: 'Blender',
             required_version: '4.3',
-            found_version: '4.2',
-            target_host: 'backend'
+            found_version: '4.2'
           }
         })
       }

@@ -11333,10 +11333,6 @@
               }
             ],
             "title": "Download Url"
-          },
-          "target_host": {
-            "title": "Target Host",
-            "type": "string"
           }
         },
         "required": [
@@ -11349,8 +11345,7 @@
           "app_title",
           "required_version",
           "found_version",
-          "download_url",
-          "target_host"
+          "download_url"
         ],
         "title": "CatalogPluginPresence",
         "type": "object"
@@ -24684,10 +24679,6 @@
               }
             ],
             "title": "Download Url"
-          },
-          "target_host": {
-            "title": "Target Host",
-            "type": "string"
           }
         },
         "required": [
@@ -24702,8 +24693,7 @@
           "app_title",
           "required_version",
           "found_version",
-          "download_url",
-          "target_host"
+          "download_url"
         ],
         "title": "OnboardingCatalogPlugin",
         "type": "object"

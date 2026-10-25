@@ -4528,7 +4528,6 @@ export interface OnboardingCatalogPlugin {
   required_version: string | null
   found_version: string | null
   download_url: string | null
-  target_host: string
 }
 export type PluginAppReason = 'available' | 'app_not_running' | 'missing_app' | 'version_too_old' | 'unsupported_os' | 'unsupported_gpu' | 'uncertain' | 'no_requirements'
 /** A named catalog plugin, including unsupported OS entries. ``state`` is the legacy card vocabulary; ``reason`` and version fields are the pinned declaration on the backend host. ``disclosure`` is the catalog description's ``Disclosure:`` sentence (empty when it has none). */
@@ -4543,7 +4542,6 @@ export interface CatalogPluginPresence {
   required_version: string | null
   found_version: string | null
   download_url: string | null
-  target_host: string
 }
 export interface PluginCatalogLookupParams {
   profile?: string | null

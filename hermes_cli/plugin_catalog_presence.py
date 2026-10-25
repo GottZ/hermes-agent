@@ -35,7 +35,6 @@ class Presence:
     reason: str = "uncertain"
     required_version: str | None = None
     found_version: str | None = None
-    target_host: str = "backend"
     app_title: str | None = None  # the name ``sentence`` used for the app
 
 
@@ -103,8 +102,7 @@ def app_guidance(entry: Any, reason: str, *, required_version: str | None = None
     reviewed = _reviewed_app(entry, actual_declaration, catalog=catalog)
     return {"reason": reason, "app_title": reviewed.title if reviewed else (app_title or entry.name),
             "required_version": required_version, "found_version": found_version,
-            "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
-            "target_host": "backend"}
+            "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None}
 
 
 def _raw_manifest_url(repo: str, sha: str, subdir: str) -> Optional[str]:

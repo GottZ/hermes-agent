@@ -46,7 +46,6 @@ def test_presence_distinguishes_backend_blockers(monkeypatch, state, reason):
     assert found.state == "missing_app"  # old clients keep their card vocabulary
     assert found.required_version == "11.0"
     assert found.found_version == ("10.9" if state == "version_too_old" else None)
-    assert found.target_host == "backend"
 
 
 def test_unreadable_version_is_uncertain_not_a_claim_of_old_version(monkeypatch):
@@ -201,7 +200,7 @@ def test_named_presence_reports_unsupported_backend_os_instead_of_hiding_row(mon
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: manifest)
     row, = presence.presence_for(["game-editor"])
     assert row["state"] == "missing_app" and row["reason"] == "unsupported_os"
-    assert row["download_url"] is None and row["target_host"] == "backend"
+    assert row["download_url"] is None
 
 
 def test_one_unreadable_server_does_not_make_other_present_server_look_sufficient(monkeypatch):
@@ -526,7 +525,7 @@ def test_install_refusal_carries_typed_reason_without_publishing(monkeypatch, tm
     # The same name the refusal sentence uses; only the vendor link needs the reviewed pin.
     assert raised.value.app_guidance == {
         "reason": "missing_app", "app_title": "NVIDIA App", "required_version": "11.0",
-        "found_version": None, "download_url": None, "target_host": "backend"}
+        "found_version": None, "download_url": None}
 
 
 def test_post_preflight_install_refusal_survives_to_rpc_data(monkeypatch):
@@ -537,7 +536,7 @@ def test_post_preflight_install_refusal_survives_to_rpc_data(monkeypatch):
         exc = PluginOperationError("Can't install plugin 'nvidia-app': needs NVIDIA App", failure_class="incompatible")
         exc.app_guidance = {"reason": "missing_app", "app_title": "NVIDIA App",
                             "required_version": "11.0", "found_version": None,
-                            "download_url": "https://www.nvidia.com/en-us/software/nvidia-app/", "target_host": "backend"}
+                            "download_url": "https://www.nvidia.com/en-us/software/nvidia-app/"}
         raise exc
 
     monkeypatch.setattr(install, "recorded_install", lambda fn, **kw: fn())
@@ -551,8 +550,7 @@ def test_post_preflight_install_refusal_survives_to_rpc_data(monkeypatch):
     assert response["error"]["code"] == 5026
     assert response["error"]["data"] == {
         "reason": "missing_app", "app_title": "nvidia-app", "required_version": "11.0",
-        "found_version": None, "download_url": None,
-        "target_host": "backend"}
+        "found_version": None, "download_url": None}
 
 
 def test_retry_from_disabled_installed_tree_rechecks_hard_app_gate(monkeypatch, tmp_path):
@@ -567,7 +565,7 @@ def test_retry_from_disabled_installed_tree_rechecks_hard_app_gate(monkeypatch, 
     def blocked(name, tree, title):
         error = PluginOperationError("app disappeared", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title, "required_version": "11.0",
-                              "found_version": None, "download_url": None, "target_host": "backend"}
+                              "found_version": None, "download_url": None}
         raise error
 
     monkeypatch.setattr(install, "_refuse_unavailable_portable_plugin", blocked)
@@ -607,7 +605,7 @@ def test_off_pin_refusal_never_uses_reviewed_vendor_metadata(monkeypatch, tmp_pa
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title or name,
                               "required_version": "11.0", "found_version": None,
-                              "download_url": None, "target_host": "backend"}
+                              "download_url": None}
         raise error
 
     monkeypatch.setattr(install, "_refuse_unavailable_portable_plugin", refused)
@@ -632,7 +630,7 @@ def test_disabled_off_pin_tree_without_ref_does_not_gain_reviewed_link(monkeypat
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": title or name,
                               "required_version": None, "found_version": None,
-                              "download_url": None, "target_host": "backend"}
+                              "download_url": None}
         raise error
 
     monkeypatch.setattr(install, "_refuse_unavailable_portable_plugin", refused)
@@ -676,7 +674,7 @@ def test_disabled_tree_retry_uses_the_catalog_pin_rule(monkeypatch, tmp_path, re
     def refused(name, tree, title):
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": name, "required_version": None,
-                              "found_version": None, "download_url": None, "target_host": "backend"}
+                              "found_version": None, "download_url": None}
         raise error
 
     seen = {}
