@@ -347,7 +347,6 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
         error.app_guidance = app_guidance(entry, "uncertain" if result.state == "version_too_old" and not result.version
                                           else result.state, required_version=result.min_version,
                                           found_version=result.version, app_title=display_title)
-        error.server_name = server_name
         error.app_declaration = server_decl.declaration
         raise error
 
@@ -847,7 +846,6 @@ def _app_refusal_result(exc, entry, *, at_reviewed_pin: bool = True) -> dict[str
         result["app_guidance"] = (app_guidance(entry, guidance["reason"],
                                   required_version=guidance["required_version"],
                                   found_version=guidance["found_version"],
-                                  server_name=getattr(exc, "server_name", None),
                                   actual_declaration=exc.app_declaration,
                                   app_title=guidance["app_title"]) if entry and at_reviewed_pin
                                   and getattr(exc, "app_declaration", None) is not None

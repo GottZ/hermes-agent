@@ -110,7 +110,6 @@ def test_reviewed_link_belongs_to_the_one_app_declared_at_the_pin(monkeypatch):
     result = presence.app_guidance(reviewed, "missing_app")
     assert result["download_url"] == "https://www.nvidia.com/en-us/software/nvidia-app/"
     assert result["app_title"] == "NVIDIA App"
-    assert presence.app_guidance(reviewed, "missing_app", server_name="other")["download_url"] is None
     # Isolate the title rule from the real catalog's Windows-only gate.
     compatible = SimpleNamespace(**{**reviewed.__dict__, "platforms": []})
     assert presence.presence(compatible).sentence == "needs NVIDIA App"
@@ -383,7 +382,6 @@ def test_install_refusal_names_the_blocker_the_presence_card_named(monkeypatch, 
         "version_too_old", min_version="2.0", version="1.0") if decl.name == "old" else Availability("missing_app"))
     with pytest.raises(PluginOperationError) as raised:
         install._refuse_unavailable_portable_plugin("studio", tmp_path)
-    assert raised.value.server_name == "gone"
     assert raised.value.app_guidance["reason"] == "missing_app"
     assert presence.BLOCKER_RANK["missing_app"] < presence.BLOCKER_RANK["version_too_old"]
 
@@ -474,7 +472,7 @@ def test_install_refusal_never_labels_a_sibling_app_as_reviewed_vendor(monkeypat
     with pytest.raises(PluginOperationError) as raised:
         install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App")
     assert "NVIDIA App" not in str(raised.value)
-    assert raised.value.server_name == "other-app"
+    assert raised.value.app_guidance["reason"] == "missing_app"
 
 def test_install_refusal_prioritizes_unsupported_sibling_over_missing_app(monkeypatch, tmp_path):
     from hermes_cli import agent_plugins
@@ -489,7 +487,6 @@ def test_install_refusal_prioritizes_unsupported_sibling_over_missing_app(monkey
     with pytest.raises(PluginOperationError) as raised:
         install._refuse_unavailable_portable_plugin("nvidia-app", tmp_path, "NVIDIA App")
     assert raised.value.app_guidance["reason"] == "unsupported_os"
-    assert raised.value.server_name == "other"
     assert "NVIDIA App" not in str(raised.value)
 
 def test_local_app_declaration_must_match_pin_before_vendor_guidance(monkeypatch):
@@ -508,7 +505,6 @@ def test_local_app_declaration_must_match_pin_before_vendor_guidance(monkeypatch
     for actual, expect_url in ((exact, True), (changed, False)):
         refusal = PluginOperationError("missing", failure_class="incompatible")
         refusal.app_guidance = presence.app_guidance(SimpleNamespace(name="nvidia-app", repo=""), "missing_app")
-        refusal.server_name = "nvidia-app"
         refusal.app_declaration = actual
         result = install._app_refusal_result(refusal, reviewed, at_reviewed_pin=True)["app_guidance"]
         assert bool(result["download_url"]) is expect_url

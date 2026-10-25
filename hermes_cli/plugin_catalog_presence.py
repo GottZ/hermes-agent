@@ -36,7 +36,6 @@ class Presence:
     required_version: str | None = None
     found_version: str | None = None
     target_host: str = "backend"
-    server_name: str | None = None
     app_title: str | None = None  # the name ``sentence`` used for the app
 
 
@@ -59,8 +58,7 @@ def blocker_rank(reason: str, required_version: str | None = None, found_version
     return BLOCKER_RANK.get(key, len(BLOCKER_RANK))
 _OS_LABELS = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}
 
-def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration: Any = None, *,
-                  catalog: list | None = None):
+def _reviewed_app(entry: Any, actual_declaration: Any = None, *, catalog: list | None = None):
     """Only a catalog pin whose plugin.json declares exactly one app may name a vendor for it.
 
     The link belongs to that one server; with several app servers a single link could name the
@@ -85,7 +83,7 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
         declarations = _server_declarations(manifest, {name: {} for name in servers}) if manifest and isinstance(servers, dict) else {}
         app_servers = [name for name, candidate in declarations.items()
                        if candidate.declaration.requires_app and candidate.declaration.app is not None]
-        if len(app_servers) != 1 or (server_name and server_name != app_servers[0]):
+        if len(app_servers) != 1:
             return None
         declared = declarations[app_servers[0]].declaration
         return reviewed if actual_declaration is None or declared == actual_declaration else None
@@ -94,13 +92,15 @@ def _reviewed_app(entry: Any, server_name: str | None = None, actual_declaration
 
 
 def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
-                 found_version: str | None = None, server_name: str | None = None,
+                 found_version: str | None = None,
                  actual_declaration: Any = None, catalog: list | None = None,
                  app_title: str | None = None) -> dict[str, str | None]:
     """Backend guidance; links require catalog identity AND an app declaration at its reviewed pin.
 
     *app_title* is the name the caller already showed for the app; the vendor link never follows it."""
-    reviewed = _reviewed_app(entry, server_name, actual_declaration, catalog=catalog)
+    # A link is offered only for missing_app / version_too_old, which only a required-app server
+    # produces; with exactly one such server that is the server it names, so none is passed.
+    reviewed = _reviewed_app(entry, actual_declaration, catalog=catalog)
     return {"reason": reason, "app_title": reviewed.title if reviewed else (app_title or entry.name),
             "required_version": required_version, "found_version": found_version,
             "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None,
@@ -219,7 +219,7 @@ def presence(entry: Any) -> Presence:
 
     try:
         found = [replace(_server_presence(d.declaration, d.liveness, title_for(name)),
-                         server_name=name, app_title=title_for(name)) for name, d in declarations.items()]
+                         app_title=title_for(name)) for name, d in declarations.items()]
     except Exception:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN
@@ -262,7 +262,7 @@ def onboarding_entries() -> list[dict[str, Any]]:
             "app_state": found.state,
             "sentence": found.sentence,
             **app_guidance(entry, found.reason, required_version=found.required_version,
-                           found_version=found.found_version, server_name=found.server_name, catalog=catalog,
+                           found_version=found.found_version, catalog=catalog,
                            app_title=found.app_title),
         })
     return rows
@@ -286,7 +286,7 @@ def presence_for(names: list[str]) -> list[dict[str, Any]]:
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
              "sentence": state.sentence, "disclosure": _disclosure(entry.description),
              **app_guidance(entry, state.reason, required_version=state.required_version,
-                            found_version=state.found_version, server_name=state.server_name, catalog=catalog,
+                            found_version=state.found_version, catalog=catalog,
                             app_title=state.app_title)}
             for entry, state in zip(entries, found)]
 
