@@ -313,12 +313,15 @@ function AppGuidancePanel({
   onRecheck,
   onHelp,
   checking,
+  helpDisabled,
   targetLabel
 }: {
   guidance: AppGuidance
   onRecheck: () => void
   onHelp: () => void
   checking: boolean
+  /** Help closes the dialog, which must not happen while an install is in flight. */
+  helpDisabled: boolean
   targetLabel: string
 }) {
   const { t } = useI18n()
@@ -364,7 +367,7 @@ function AppGuidancePanel({
         <Button disabled={checking} onClick={onRecheck} size="sm" variant="outline">
           {copy.recheck}
         </Button>
-        <Button onClick={onHelp} size="sm" variant="outline">
+        <Button disabled={helpDisabled} onClick={onHelp} size="sm" variant="outline">
           {copy.askHermes}
         </Button>
       </div>
@@ -538,7 +541,8 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   )
 
   const askForHelp = () => {
-    if (!guidance) {
+    // Closing here would bypass the dialog's no-dismiss-while-installing guard.
+    if (!guidance || installing) {
       return
     }
 
@@ -621,6 +625,7 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
           <AppGuidancePanel
             checking={checkingApp || installing}
             guidance={guidance}
+            helpDisabled={installing}
             onHelp={askForHelp}
             onRecheck={() => void recheckApp()}
             targetLabel={targetLabel}

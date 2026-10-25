@@ -234,6 +234,31 @@ describe('A reviewed catalog pick', () => {
     expect(installButton().disabled).toBe(true)
   })
 
+  it('keeps Ask Hermes from closing the dialog while an install is in flight', async () => {
+    const install = deferred<unknown>()
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? { presence: [{ name: 'blender', reason: 'app_not_running', app_title: 'Blender', target_host: 'backend' }] }
+        : params?.action === 'install'
+          ? install.promise
+          : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    await waitFor(() => expect(installButton().disabled).toBe(false))
+    fireEvent.click(installButton())
+    await waitFor(() => expect(installCalls()).toHaveLength(1))
+    const help = screen.getByRole('button', { name: 'Ask Hermes for help' }) as HTMLButtonElement
+    expect(help.disabled).toBe(true)
+    fireEvent.click(help)
+    expect($pluginInstallRequest.get()).not.toBeNull()
+    expect($pendingPluginHelpDraft.get()).toBeNull()
+    await act(async () => {
+      install.resolve({ ok: true, plugin_name: 'blender' })
+      await install.promise
+    })
+  })
+
   it('shows no app doubt for a plugin whose pin declares no app requirement', async () => {
     requestGateway.mockImplementation(async (_method, params) =>
       params?.action === 'presence'
