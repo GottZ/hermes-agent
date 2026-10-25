@@ -1,3 +1,4 @@
+import { JsonRpcGatewayError } from '@hermes/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -19,6 +20,28 @@ afterEach(() => {
 })
 
 describe('installAgentPlugin', () => {
+  it('preserves typed app refusal on an install race without mistaking it for a timeout', async () => {
+    const guidance = {
+      reason: 'version_too_old',
+      app_title: 'Godot 4',
+      required_version: '4.3',
+      found_version: '4.2',
+      target_host: 'backend'
+    }
+
+    const request = vi.fn(async () => {
+      throw new JsonRpcGatewayError('app unavailable', { code: 5026, data: guidance })
+    })
+
+    expect(
+      await installAgentPlugin(request as never, { identifier: 'game-editor', catalogName: 'game-editor' })
+    ).toMatchObject({
+      ok: false,
+      timedOut: false,
+      appGuidance: guidance
+    })
+  })
+
   it('waits for a slow successful install instead of reporting the generic 30s timeout', async () => {
     vi.useFakeTimers()
 
@@ -133,7 +156,12 @@ describe('saveAgentPluginSettings (#46600, #87934)', () => {
       writeSecret: vi.fn(async () => ({ ok: true }))
     })
 
-    expect(request).toHaveBeenCalledWith('plugins.manage', { action: 'settings', key: 'demo', profile: 'workbot', values: {} })
+    expect(request).toHaveBeenCalledWith('plugins.manage', {
+      action: 'settings',
+      key: 'demo',
+      profile: 'workbot',
+      values: {}
+    })
     expect(JSON.stringify(request.mock.calls)).not.toContain('sk-2')
   })
 

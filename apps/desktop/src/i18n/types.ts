@@ -635,6 +635,19 @@ catalog: CatalogTranslations
       failed: string
       kinds: { bundled: string; disk: string; runtime: string }
       installModal: {
+        appGuidance: {
+          missing: (name: string) => string
+          oldVersion: (name: string, required: string, found: string) => string
+          unsupportedOs: (name: string) => string
+          unsupportedGpu: (name: string) => string
+          uncertain: (name: string) => string
+          notRunning: (name: string) => string
+          backendHost: string
+          download: (name: string) => string
+          recheck: string
+          askHermes: string
+          helpDraft: (name: string, profile: string) => string
+        }
         installFromGit: string
         reviewRepository: string
         repoPlaceholder: string

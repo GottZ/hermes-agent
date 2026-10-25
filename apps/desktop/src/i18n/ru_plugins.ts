@@ -22,6 +22,21 @@ export const ruPluginSettings = {
     failed: 'ошибка',
     kinds: { bundled: 'встроенный', disk: 'на диске', runtime: 'runtime' },
     installModal: {
+      appGuidance: {
+        missing: (name: string) => `${name} не установлен. Сначала установите его на компьютере бэкенда.`,
+        oldVersion: (name: string, required: string, found: string) =>
+          `Нужен ${name} версии ${required} или новее (обнаружена ${found || 'старая версия'}). Обновите его на бэкенде.`,
+        unsupportedOs: (name: string) => `${name} не поддерживается операционной системой бэкенда.`,
+        unsupportedGpu: (name: string) => `GPU бэкенда не поддерживается для ${name}.`,
+        uncertain: (name: string) => `Не удалось проверить наличие ${name}. Можно попробовать установить плагин.`,
+        notRunning: (name: string) => `${name} установлен, но не запущен в интерактивном сеансе рабочего стола.`,
+        backendHost: 'Проверяется подключённый бэкенд, а не это приложение.',
+        download: (name: string) => `Скачать ${name} с официального сайта`,
+        recheck: 'Проверить снова',
+        askHermes: 'Попросить Hermes помочь',
+        helpDraft: (name: string, profile: string) =>
+          `Помоги установить или обновить ${name} на компьютере бэкенда для профиля ${profile}. Сначала проверь ОС и требования, объясни шаги и спроси разрешения перед изменениями или загрузкой программ.`
+      },
       title: 'Установка плагина',
       description: 'Перед установкой посмотрите, что содержит этот репозиторий.',
       repoLabel: 'Репозиторий',
@@ -80,8 +95,7 @@ export const ruPluginSettings = {
 
 /** Russian copy for the Capabilities ▸ Plugins tab: the page blurb and a plugin's folder access. */
 export const ruPluginsTab = {
-  pageBlurb:
-    'Плагин может расширять приложение, агента или оба сразу — у каждой части свой переключатель.',
+  pageBlurb: 'Плагин может расширять приложение, агента или оба сразу — у каждой части свой переключатель.',
   folderAccess: {
     title: 'Доступ к папкам',
     hint: (name: string) => `${name} может читать и изменять файлы в этих папках. Отзыв доступа действует сразу.`,

@@ -1,3 +1,4 @@
+import { JsonRpcGatewayError } from '@hermes/shared'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -20,12 +21,14 @@ vi.mock('@/hermes', async importOriginal => ({
 
 import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugin } from '@/contrib/plugins-store'
 import { queryClient } from '@/lib/query-client'
+import { $composerDraft } from '@/store/composer'
 import {
+  $pendingPluginHelpDraft,
   $pluginInstallRequest,
   closePluginInstallRequest,
   openPluginInstallRequest
 } from '@/store/plugin-install-request'
-import { $activeGatewayProfile, $profiles } from '@/store/profile'
+import { $activeGatewayProfile, $freshSessionRequest, $profiles } from '@/store/profile'
 import { $connection, $gatewayState } from '@/store/session'
 
 import { PluginsTab } from '../capabilities/plugins/plugins-tab'
@@ -70,6 +73,8 @@ beforeEach(() => {
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   queryClient.clear()
   closePluginInstallRequest()
+  $pendingPluginHelpDraft.set(null)
+  $composerDraft.set('')
   $gatewayState.set('idle')
   $connection.set({ mode: 'local' } as NonNullable<ReturnType<typeof $connection.get>>)
   $activeGatewayProfile.set('default')
@@ -105,6 +110,127 @@ afterEach(() => {
 })
 
 describe('A reviewed catalog pick', () => {
+  it('requests a fresh chat even when help targets the already active profile', async () => {
+    requestGateway.mockImplementation(async (_method, params) => params?.action === 'presence'
+      ? { presence: [{ name: 'blender', reason: 'missing_app', app_title: 'Blender', target_host: 'backend' }] }
+      : { plugins: [] })
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    expect(await screen.findByText(/Blender is not installed/)).toBeTruthy()
+    const before = $freshSessionRequest.get()
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Hermes for help' }))
+    expect($freshSessionRequest.get()).toBeGreaterThan(before)
+  })
+
+  it('only drafts backend-scoped help after the user asks, never submits or downloads', async () => {
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? { presence: [{ name: 'game-editor', reason: 'missing_app', app_title: 'Godot 4', target_host: 'backend' }] }
+        : { plugins: [] }
+    )
+    renderFlow()
+    act(() =>
+      openPluginInstallRequest({ ...BLENDER, catalogName: 'game-editor', profile: 'research', title: 'Game Editor' })
+    )
+    expect(await screen.findByText(/Godot 4 is not installed/)).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain('Research Bot')
+    expect($composerDraft.get()).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Hermes for help' }))
+    expect($composerDraft.get()).toBe('')
+    expect($pendingPluginHelpDraft.get()).toContain('Godot 4 on the backend computer for the research profile')
+    expect($pluginInstallRequest.get()).toBeNull()
+    expect(installCalls()).toHaveLength(0)
+    expect(installDesktopPlugin).not.toHaveBeenCalled()
+  })
+
+  it('blocks known missing Godot on the backend, offers official download and rechecks before install', async () => {
+    let available = false
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? {
+            presence: [
+              {
+                name: 'game-editor',
+                reason: available ? 'available' : 'missing_app',
+                app_title: 'Godot 4',
+                target_host: 'backend',
+                download_url: available ? null : 'https://godotengine.org/download/macos/'
+              }
+            ]
+          }
+        : params?.action === 'install'
+          ? { ok: true, plugin_name: 'game-editor' }
+          : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest({ ...BLENDER, catalogName: 'game-editor', title: 'Game Editor' }))
+    expect(await screen.findByText(/Godot 4 is not installed/)).toBeTruthy()
+    expect(installButton().disabled).toBe(true)
+    expect(screen.getByRole('link', { name: /Download Godot 4/ }).getAttribute('href')).toBe(
+      'https://godotengine.org/download/macos/'
+    )
+    expect(installCalls()).toHaveLength(0)
+    available = true
+    fireEvent.click(screen.getByRole('button', { name: /Check again/ }))
+    await waitFor(() => expect(installButton().disabled).toBe(false))
+    fireEvent.click(installButton())
+    await waitFor(() => expect(installCalls()).toHaveLength(1))
+    expect(requestGateway.mock.calls.filter(([, params]) => params?.action === 'presence')).toHaveLength(3)
+  })
+
+  it('treats unsupported hardware as blocked without any vendor download', async () => {
+    requestGateway.mockImplementation(async (_method, params) =>
+      params?.action === 'presence'
+        ? {
+            presence: [
+              {
+                name: 'nvidia-app',
+                reason: 'unsupported_gpu',
+                app_title: 'NVIDIA App',
+                target_host: 'backend',
+                download_url: 'https://www.nvidia.com/en-us/software/nvidia-app/'
+              }
+            ]
+          }
+        : { plugins: [] }
+    )
+    renderFlow()
+    act(() => openPluginInstallRequest({ ...BLENDER, catalogName: 'nvidia-app', title: 'NVIDIA App' }))
+    expect(await screen.findByText(/GPU.*not supported/)).toBeTruthy()
+    expect(installButton().disabled).toBe(true)
+    expect(screen.queryByRole('link', { name: /Download/ })).toBeNull()
+  })
+
+  it('shows typed post-preflight refusal as app guidance and does not retry blindly', async () => {
+    requestGateway.mockImplementation(async (_method, params) => {
+      if (params?.action === 'presence') {
+        return { presence: [{ name: 'blender', reason: 'available', app_title: 'Blender', target_host: 'backend' }] }
+      }
+
+      if (params?.action === 'install') {
+        throw new JsonRpcGatewayError('blocked', {
+          code: 5026,
+          data: {
+            reason: 'version_too_old',
+            app_title: 'Blender',
+            required_version: '4.3',
+            found_version: '4.2',
+            target_host: 'backend'
+          }
+        })
+      }
+
+      return { plugins: [] }
+    })
+    renderFlow()
+    act(() => openPluginInstallRequest(BLENDER))
+    await waitFor(() => expect(installButton().disabled).toBe(false))
+    fireEvent.click(installButton())
+    expect(await screen.findByText(/Blender 4.3 or newer.*4.2/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(installButton().disabled).toBe(true)
+  })
+
   it('shows only name, one line and Verified until Advanced reveals source, version and profile', async () => {
     renderFlow()
     act(() => openPluginInstallRequest(BLENDER))
@@ -185,6 +311,7 @@ describe('A reviewed catalog pick', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Research Bot' }))
 
     expect(screen.getByText('Reviewed by Nous. Installs for Research Bot and turns on right away.')).toBeTruthy()
+    await waitFor(() => expect(installButton().disabled).toBe(false))
     fireEvent.click(installButton())
 
     await waitFor(() => expect(installCalls()[0]?.[1]).toMatchObject({ catalog_name: 'blender', profile: 'research' }))

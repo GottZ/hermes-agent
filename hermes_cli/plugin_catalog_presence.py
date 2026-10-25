@@ -27,13 +27,37 @@ _manifests: dict[tuple[str, str, str], Optional[dict[str, Any]]] = {}
 
 @dataclass(frozen=True)
 class Presence:
-    """``state`` uses the card's vocabulary (``CatalogAppState``); ``sentence`` is empty when present or unknown."""
+    """``state`` keeps the card vocabulary; ``reason`` records the backend resolver's distinction."""
 
     state: str
     sentence: str = ""
+    reason: str = "uncertain"
+    required_version: str | None = None
+    found_version: str | None = None
+    target_host: str = "backend"
 
 
 UNKNOWN = Presence("unknown")
+
+# Vendor links are host-owned, never accepted from an untrusted plugin manifest.
+_OFFICIAL_DOWNLOADS = {
+    ("nvidia-app", "https://github.com/NousResearch/hermes-nvidia"):
+        ("NVIDIA App", "https://www.nvidia.com/en-us/software/nvidia-app/"),
+    ("nvidia-broadcast", "https://github.com/NousResearch/hermes-nvidia"):
+        ("NVIDIA Broadcast", "https://www.nvidia.com/en-us/geforce/broadcasting/broadcast-app/"),
+    ("game-editor", "https://github.com/TakeshiTGAL/hermes-plugin-game-editor"):
+        ("Godot 4", "https://godotengine.org/download/macos/"),
+}
+
+
+def app_guidance(entry: Any, reason: str, *, required_version: str | None = None,
+                 found_version: str | None = None) -> dict[str, str | None]:
+    """Backend-host guidance; links only for an identified vendor's app/version blocker."""
+    curated = _OFFICIAL_DOWNLOADS.get((entry.name, entry.repo))
+    return {"reason": reason, "app_title": curated[0] if curated else (entry.title or entry.name),
+            "required_version": required_version, "found_version": found_version,
+            "download_url": curated[1] if curated and reason in ("missing_app", "version_too_old") else None,
+            "target_host": "backend"}
 
 
 def _raw_manifest_url(repo: str, sha: str, subdir: str) -> Optional[str]:
@@ -75,32 +99,38 @@ def _server_presence(decl: Any, liveness_raw: Any, title: str) -> Presence:
     from hermes_platform.resolver.base import Effort
     from tools.mcp_liveness import parse_liveness
 
-    available = availability(decl)
+    try:
+        available = availability(decl)
+    except Exception:
+        logger.debug("plugin catalog presence: app discovery failed", exc_info=True)
+        return UNKNOWN
     if available.state == "no_requirements":
         return UNKNOWN
     if available.state in ("missing_app", "unsupported_os"):
-        return Presence("missing_app", f"needs {title}")
+        return Presence("missing_app", f"needs {title}", available.state, available.min_version)
     if available.state == "unsupported_gpu":
-        return Presence("missing_app", f"needs {gpu_label(decl.required_gpu)}")
+        return Presence("missing_app", f"needs {gpu_label(decl.required_gpu)}", "unsupported_gpu", available.min_version)
     if available.state == "version_too_old":
-        found = f" (found {available.version})" if available.version else ""
-        return Presence("missing_app", f"needs {title} {available.min_version} or newer{found}")
+        if not available.version:
+            return Presence("unknown", f"Could not determine {title}'s version", "uncertain", available.min_version)
+        return Presence("missing_app", f"needs {title} {available.min_version} or newer (found {available.version})",
+                        "version_too_old", available.min_version, available.version)
     try:
         live = parse_liveness(liveness_raw) if liveness_raw is not None else None
     except ValueError:
-        live = None
+        return UNKNOWN
     if live is None or live.kind == "static":
-        return Presence("present")
+        return Presence("present", reason="available", required_version=available.min_version)
     if live.kind == "interactive_session":
-        return Presence("present") if facts.interactive_session() else Presence(
-            "app_not_running", f"{title} needs an interactive desktop session")
+        return Presence("present", reason="available", required_version=available.min_version) if facts.interactive_session() else Presence(
+            "app_not_running", f"{title} needs an interactive desktop session", "app_not_running", available.min_version)
     definition = decl.app_for(facts.os_family())
     if definition is None:
-        return Presence("missing_app", f"needs {title}")
+        return Presence("unknown", f"Could not inspect {title}", "uncertain", available.min_version)
     resolver = AppResolver(live.app_definition(definition))
     probe = resolver.probe(resolver.locate(), effort=Effort.LOCAL)
-    return Presence("present") if probe.running.value is True else Presence(
-        "app_not_running", f"{title} is not running")
+    return Presence("present", reason="available", required_version=available.min_version) if probe.running.value is True else Presence(
+        "app_not_running", f"{title} is not running", "app_not_running", available.min_version)
 
 
 def presence(entry: Any) -> Presence:
@@ -118,10 +148,17 @@ def presence(entry: Any) -> Presence:
     except Exception as exc:
         logger.debug("plugin catalog presence: %s declaration invalid: %s", entry.name, exc)
         return UNKNOWN
-    title = getattr(entry, "title", "") or entry.name
-    rank = {"missing_app": 0, "app_not_running": 1, "present": 2, "unknown": 3}
-    found = [_server_presence(d.declaration, d.liveness, title) for d in declarations.values()]
-    return min(found, key=lambda p: rank[p.state]) if found else UNKNOWN
+    title = _OFFICIAL_DOWNLOADS.get((entry.name, entry.repo), (entry.title or entry.name, ""))[0]
+    try:
+        found = [_server_presence(d.declaration, d.liveness, title) for d in declarations.values()]
+    except Exception:
+        logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
+        return UNKNOWN
+    # In an all-of plugin, an unsupported or uncertain server must not be masked by an
+    # actionable missing-app sibling (which would misleadingly invite an install).
+    rank = {"unsupported_os": 0, "unsupported_gpu": 1, "uncertain": 2,
+            "missing_app": 3, "version_too_old": 4, "app_not_running": 5, "available": 6}
+    return min(found, key=lambda p: rank[p.reason]) if found else UNKNOWN
 
 
 def _onboarding_catalog() -> list:
@@ -154,30 +191,30 @@ def onboarding_entries() -> list[dict[str, Any]]:
             "platforms": list(entry.platforms),
             "app_state": found.state,
             "sentence": found.sentence,
+            **app_guidance(entry, found.reason, required_version=found.required_version,
+                           found_version=found.found_version),
         })
     return rows
 
 
 def presence_for(names: list[str]) -> list[dict[str, Any]]:
-    """The named catalog plugins this OS runs, in the order asked, each with its app state and the
-    catalog description's disclosure. A name the live catalog does not carry (unknown or removed) is dropped."""
+    """Named catalog plugins in request order, including those this backend OS cannot run.
+    A name the live catalog does not carry (unknown or removed) is dropped."""
     from concurrent.futures import ThreadPoolExecutor
 
     from hermes_cli.plugin_catalog import load_catalog_live
-    from hermes_cli.plugins_cmd_catalog import normalized_platforms
-    from hermes_platform.host.facts import os_family
-
-    here = os_family()
     by_name = {entry.name: entry for entry in load_catalog_live()}
-    entries = [by_name[name] for name in dict.fromkeys(names) if name in by_name
-               and (not by_name[name].platforms or here in normalized_platforms(by_name[name].platforms))]
+    # An explicit named request must report unsupported_os rather than silently hiding the row.
+    entries = [by_name[name] for name in dict.fromkeys(names) if name in by_name]
     if not entries:
         return []
     # Each manifest read is bounded by _TIMEOUT; in parallel the whole answer waits one timeout, not one per name.
     with ThreadPoolExecutor(max_workers=len(entries)) as pool:
         found = list(pool.map(presence, entries))
     return [{"name": entry.name, "title": entry.title or entry.name, "state": state.state,
-             "sentence": state.sentence, "disclosure": _disclosure(entry.description)}
+             "sentence": state.sentence, "disclosure": _disclosure(entry.description),
+             **app_guidance(entry, state.reason, required_version=state.required_version,
+                            found_version=state.found_version)}
             for entry, state in zip(entries, found)]
 
 

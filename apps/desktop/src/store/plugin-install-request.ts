@@ -31,6 +31,20 @@ export interface PluginInstallRequest {
 
 export const $pluginInstallRequest = atom<PluginInstallRequest | null>(null)
 
+/** One explicit user-initiated help draft, delivered only after fresh-chat rotation. */
+export const $pendingPluginHelpDraft = atom<string | null>(null)
+
+export function queuePluginHelpDraft(text: string): void {
+  $pendingPluginHelpDraft.set(text)
+}
+
+export function takePluginHelpDraft(): string | null {
+  const text = $pendingPluginHelpDraft.get()
+  $pendingPluginHelpDraft.set(null)
+
+  return text
+}
+
 export function openPluginInstallRequest(request: PluginInstallRequest): void {
   $pluginInstallRequest.set(request)
 }

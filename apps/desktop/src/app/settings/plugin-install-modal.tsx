@@ -19,16 +19,34 @@ import {
 import { DisclosureCaret } from '@/components/ui/disclosure-caret'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/i18n'
+import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle, Loader2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { COMMIT_SHA_RE } from '@/store/agent-plugins'
+import { activeGatewayConnectionId } from '@/store/gateway'
+import {
+  type AppGuidance,
+  isAppBlocked,
+  officialAppDownloadUrl,
+  presenceForCatalogPlugin
+} from '@/store/plugin-app-guidance'
 import {
   $pluginInstallRequest,
   closePluginInstallRequest,
   openPluginInstallRequest,
-  type PluginInstallRequest
+  type PluginInstallRequest,
+  queuePluginHelpDraft
 } from '@/store/plugin-install-request'
-import { $activeGatewayProfile, $profiles, $profileScope, normalizeProfileKey, profileLabel } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  $profileScope,
+  newSessionInAgent,
+  normalizeProfileKey,
+  profileLabel,
+  requestFreshSession,
+  selectProfile
+} from '@/store/profile'
 import { $connection } from '@/store/session'
 
 import { PluginInstallDetails } from './plugin-install-details'
@@ -283,6 +301,66 @@ function InstallFooter({ canInstall, failed, installing, onInstall, onRetry }: I
   )
 }
 
+function AppGuidancePanel({
+  guidance,
+  onRecheck,
+  onHelp,
+  checking,
+  targetLabel
+}: {
+  guidance: AppGuidance
+  onRecheck: () => void
+  onHelp: () => void
+  checking: boolean
+  targetLabel: string
+}) {
+  const { t } = useI18n()
+  const copy = t.settings.plugins.installModal.appGuidance
+  const url = officialAppDownloadUrl(guidance)
+
+  const description = {
+    missing_app: () => copy.missing(guidance.app_title),
+    version_too_old: () =>
+      copy.oldVersion(guidance.app_title, guidance.required_version ?? '', guidance.found_version ?? ''),
+    unsupported_os: () => copy.unsupportedOs(guidance.app_title),
+    unsupported_gpu: () => copy.unsupportedGpu(guidance.app_title),
+    uncertain: () => copy.uncertain(guidance.app_title),
+    app_not_running: () => copy.notRunning(guidance.app_title),
+    available: () => ''
+  }[guidance.reason]()
+
+  if (!description) {
+    return null
+  }
+
+  return (
+    <div
+      className={cn(
+        CAPTION,
+        'space-y-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-2'
+      )}
+      role="status"
+    >
+      <p>
+        {description} {copy.backendHost} {t.settings.plugins.installModal.profileLabel}: {targetLabel}.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        {url && (
+          <ExternalLink href={url} native showExternalIcon>
+            {copy.download(guidance.app_title)}
+          </ExternalLink>
+        )}
+        <Button disabled={checking} onClick={onRecheck} size="sm" variant="outline">
+          {copy.recheck}
+        </Button>
+        <Button onClick={onHelp} size="sm" variant="outline">
+          {copy.askHermes}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 interface InstallViewProps {
   request: PluginInstallRequest
   installing: boolean
@@ -311,6 +389,68 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   const [pinRef, setPinRef] = useState('')
   const [installError, setInstallError] = useState<null | string>(null)
   const [installUncertain, setInstallUncertain] = useState(false)
+  const [guidance, setGuidance] = useState<AppGuidance | null>(null)
+  const [checkingApp, setCheckingApp] = useState(verified)
+
+  useEffect(() => {
+    if (!request.catalogName) {
+      return
+    }
+
+    let current = true
+    setGuidance(null)
+    setCheckingApp(true)
+    void presenceForCatalogPlugin(requestGateway, request.catalogName, targetProfile).then(found => {
+      if (current) {
+        setGuidance(found)
+        setCheckingApp(false)
+      }
+    })
+
+    return () => {
+      current = false
+    }
+  }, [request.catalogName, requestGateway, targetProfile])
+
+  const recheckApp = async (): Promise<AppGuidance | null> => {
+    if (!request.catalogName) {
+      return null
+    }
+
+    setCheckingApp(true)
+
+    try {
+      const found = await presenceForCatalogPlugin(requestGateway, request.catalogName, targetProfile)
+      setGuidance(found)
+
+      return found
+    } finally {
+      setCheckingApp(false)
+    }
+  }
+
+  const askForHelp = () => {
+    if (!guidance) {
+      return
+    }
+
+    queuePluginHelpDraft(m.appGuidance.helpDraft(guidance.app_title, targetProfile))
+    const connectionId = activeGatewayConnectionId()
+
+    if (connectionId) {
+      newSessionInAgent({ connectionId, profile: targetProfile })
+    } else {
+      const alreadyActive = normalizeProfileKey(activeProfile) === targetProfile
+      selectProfile(targetProfile)
+
+      if (alreadyActive) {
+        requestFreshSession()
+      }
+    }
+
+    closePluginInstallRequest()
+    navigate(NEW_CHAT_ROUTE)
+  }
 
   useEffect(() => {
     start(request.repo)
@@ -338,6 +478,13 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
         return
       }
 
+      // Backend host is authoritative even when the earlier check looked available.
+      const latest = await recheckApp()
+
+      if (isAppBlocked(latest)) {
+        return
+      }
+
       const outcome = await runPluginInstall(
         { request, probe: detected, profile: targetProfile, enable, force, ref: pin || undefined, remote },
         { copy: m, navigate, requestGateway }
@@ -347,6 +494,8 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
         finishInstall(request, navigate)
       } else if (outcome.status === 'uncertain') {
         setInstallUncertain(true)
+      } else if (outcome.status === 'app_blocked') {
+        setGuidance(outcome.guidance)
       } else {
         setInstallError(outcome.error)
       }
@@ -364,7 +513,13 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   }
 
   // An unverified repository installs only once its contents are on screen; a reviewed pick may start at once.
-  const canInstall = !installing && !installUncertain && !pinInvalid && (verified || Boolean(probe?.ok))
+  const canInstall =
+    !installing &&
+    !checkingApp &&
+    !isAppBlocked(guidance) &&
+    !installUncertain &&
+    !pinInvalid &&
+    (verified || Boolean(probe?.ok))
 
   return (
     <>
@@ -372,6 +527,15 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
 
       <div className="space-y-3">
         <ProbeWarnings copy={m} probe={probe} />
+        {guidance && (
+          <AppGuidancePanel
+            checking={checkingApp || installing}
+            guidance={guidance}
+            onHelp={askForHelp}
+            onRecheck={() => void recheckApp()}
+            targetLabel={targetLabel}
+          />
+        )}
 
         <Disclosure label={m.advanced} onToggle={() => setAdvancedOpen(open => !open)} open={advancedOpen}>
           <PluginInstallDetails

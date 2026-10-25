@@ -779,6 +779,23 @@ export const deOverrides = {
         runtime: 'Laufzeit'
       },
       installModal: {
+        appGuidance: {
+          missing: name =>
+            `${name} ist nicht installiert. Installiere es auf dem Backend-Rechner, bevor du dieses Plugin installierst.`,
+          oldVersion: (name, required, found) =>
+            `${name} ${required} oder neuer ist nötig (gefunden: ${found || 'ältere Version'}). Aktualisiere es auf dem Backend-Rechner.`,
+          unsupportedOs: name => `${name} wird auf dem Betriebssystem des Backends nicht unterstützt.`,
+          unsupportedGpu: name => `Die GPU des Backends wird für ${name} nicht unterstützt.`,
+          uncertain: name =>
+            `Ob ${name} verfügbar ist, konnte nicht geprüft werden. Du kannst die Plugin-Installation versuchen.`,
+          notRunning: name => `${name} ist installiert, läuft aber nicht in einer interaktiven Desktop-Sitzung.`,
+          backendHost: 'Geprüft wird das verbundene Backend, nicht diese Desktop-App.',
+          download: name => `${name} von der offiziellen Herstellerseite herunterladen`,
+          recheck: 'Erneut prüfen',
+          askHermes: 'Hermes um Hilfe bitten',
+          helpDraft: (name, profile) =>
+            `Hilf mir, ${name} auf dem Backend-Rechner für das Profil ${profile} zu installieren oder zu aktualisieren. Prüfe zuerst Betriebssystem und Voraussetzungen. Erkläre die Schritte und frage vor Änderungen oder Downloads nach.`
+        },
         installFromGit: 'Von Git installieren',
         reviewRepository: 'Repository prüfen',
         repoPlaceholder: 'https://github.com/owner/repo',

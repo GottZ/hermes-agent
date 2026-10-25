@@ -780,6 +780,22 @@ export const frOverrides = {
         runtime: "à l'exécution"
       },
       installModal: {
+        appGuidance: {
+          missing: name => `${name} n’est pas installé. Installez-le sur l’ordinateur du backend avant ce plugin.`,
+          oldVersion: (name, required, found) =>
+            `${name} ${required} ou plus récent est nécessaire (version détectée : ${found || 'ancienne'}). Mettez-le à jour sur le backend.`,
+          unsupportedOs: name => `${name} n’est pas pris en charge par le système du backend.`,
+          unsupportedGpu: name => `Le GPU du backend n’est pas pris en charge pour ${name}.`,
+          uncertain: name =>
+            `Impossible de vérifier si ${name} est disponible. Vous pouvez essayer d’installer le plugin.`,
+          notRunning: name => `${name} est installé, mais ne fonctionne pas dans une session de bureau interactive.`,
+          backendHost: 'La vérification concerne le backend connecté, pas cette application Desktop.',
+          download: name => `Télécharger ${name} depuis le site officiel`,
+          recheck: 'Vérifier à nouveau',
+          askHermes: 'Demander de l’aide à Hermes',
+          helpDraft: (name, profile) =>
+            `Aide-moi à installer ou mettre à jour ${name} sur le backend pour le profil ${profile}. Vérifie d’abord son système et les prérequis. Explique les étapes et demande mon accord avant toute modification ou téléchargement.`
+        },
         installFromGit: 'Installer depuis Git',
         reviewRepository: 'Examiner le dépôt',
         repoPlaceholder: 'https://github.com/proprietaire/depot',

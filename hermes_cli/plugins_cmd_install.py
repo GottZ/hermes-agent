@@ -14,6 +14,7 @@ import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from hermes_cli.cli_output import line_input
@@ -319,8 +320,16 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
         problem = availability_problem(result)
         reason = (describe(server_decl.declaration, result, problem, display_name=app_title)
                   if problem else f"its app is unavailable ({result.state}).")
-        raise _pc().PluginOperationError(f"Can't install plugin '{plugin_name}': {reason}",
-                                         failure_class="incompatible")
+        from hermes_cli.plugin_catalog_presence import app_guidance
+        # The clone itself is authoritative at the publication gate, not an earlier preflight pin.
+        # A custom source has no trusted vendor URL; the catalog identity is attached later.
+        entry = SimpleNamespace(name=plugin_name, repo="", title=app_title or plugin_name)
+        error = _pc().PluginOperationError(f"Can't install plugin '{plugin_name}': {reason}",
+                                           failure_class="incompatible")
+        error.app_guidance = app_guidance(entry, "uncertain" if result.state == "version_too_old" and not result.version
+                                          else result.state, required_version=result.min_version,
+                                          found_version=result.version)
+        raise error
 
 
 def _known_issue_warnings(entry) -> list[str]:
@@ -811,6 +820,16 @@ def _resolve_source(identifier: str, catalog_name: Optional[str]) -> tuple:
     return entry, identifier, warnings, None
 
 
+def _app_refusal_result(exc, entry) -> dict[str, Any]:
+    result: dict[str, Any] = {"ok": False, "error": str(exc)}
+    if guidance := getattr(exc, "app_guidance", None):
+        from hermes_cli.plugin_catalog_presence import app_guidance
+        result["app_guidance"] = (app_guidance(entry, guidance["reason"],
+                                  required_version=guidance["required_version"],
+                                  found_version=guidance["found_version"]) if entry else guidance)
+    return result
+
+
 def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assume_deps_consent: bool,
                 step: Callable[[InstallPhase], None]) -> tuple | dict:
     """``(target, manifest, installed_name)`` of the tree to enable, or the error result. A catalog
@@ -820,6 +839,10 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
     ref = (ref or "").strip() or None
     on_disk = _catalog_install_on_disk(entry.name, ref) if entry is not None and not force else None
     if on_disk is not None:
+        try:
+            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], entry.title or None)
+        except _pc().PluginOperationError as exc:
+            return _app_refusal_result(exc, entry)
         return on_disk
 
     def _install() -> tuple:
@@ -835,7 +858,7 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
     except _pc().PluginScanBlocked as exc:
         return scan_blocked_result(exc)
     except _pc().PluginOperationError as exc:
-        return {"ok": False, "error": str(exc)}
+        return _app_refusal_result(exc, entry)
 
 
 def _enable_placed(installed_name: str, deps, step: Callable[[InstallPhase], None]) -> Optional[dict]:

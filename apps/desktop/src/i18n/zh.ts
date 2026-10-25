@@ -618,6 +618,21 @@ export const zhOverrides = {
       failed: '失败',
       kinds: { bundled: '内置', disk: '磁盘', runtime: '运行时' },
       installModal: {
+        appGuidance: {
+          missing: name => `${name} 尚未安装。请先在后端计算机上安装，再安装此插件。`,
+          oldVersion: (name, required, found) =>
+            `需要 ${name} ${required} 或更高版本（当前：${found || '旧版本'}）。请在后端计算机上更新。`,
+          unsupportedOs: name => `后端操作系统不支持 ${name}。`,
+          unsupportedGpu: name => `后端 GPU 不支持 ${name}。`,
+          uncertain: name => `无法确认 ${name} 是否可用。你可以尝试安装插件。`,
+          notRunning: name => `${name} 已安装，但未在交互式桌面会话中运行。`,
+          backendHost: '检查的是已连接的后端，而不是此桌面应用。',
+          download: name => `从官方网站下载 ${name}`,
+          recheck: '重新检查',
+          askHermes: '向 Hermes 寻求帮助',
+          helpDraft: (name, profile) =>
+            `请帮我在后端计算机为 ${profile} 配置文件安装或更新 ${name}。先检查操作系统和要求，说明步骤，并在修改或下载任何内容之前征求我的同意。`
+        },
         installFromGit: '从 Git 安装',
         reviewRepository: '检查仓库',
         repoPlaceholder: 'https://github.com/owner/repo',

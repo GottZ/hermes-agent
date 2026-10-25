@@ -3,6 +3,8 @@ import { atom } from 'nanostores'
 
 import { notifyError } from '@/store/notifications'
 
+import { type AppGuidance, appGuidanceFromError } from './plugin-app-guidance'
+
 /**
  * Feature store for backend (agent) plugins — the native Hermes plugins plus
  * portable Agent Plugins v1 packages the backend discovers on disk. Settings
@@ -260,6 +262,8 @@ export interface AgentPluginInstallResult {
   /** The `<namespace>:<skill>` names the model can now load (`activation.live_now.skills`). */
   skillIds?: string[]
   error?: string
+  /** Structured backend-host refusal when app availability changed after preflight. */
+  appGuidance?: AppGuidance
   /** What became usable in open chats of the profile (`activation.live_now`). */
   live: AgentPluginLiveNow
   /** Python tools or prompt sections that wait for the next chat (`activation.deferred`). */
@@ -359,6 +363,7 @@ export async function installAgentPlugin(
       ok: false,
       timedOut: /^request timed out after \d+s: plugins\.manage$/.test(message),
       error: message,
+      appGuidance: opts.catalogName ? (appGuidanceFromError(e) ?? undefined) : undefined,
       live: NO_LIVE,
       nextChat: false
     }

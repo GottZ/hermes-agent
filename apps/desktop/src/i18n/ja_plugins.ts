@@ -17,6 +17,23 @@ export const jaPluginSettings = {
   plugins: {
     openFolder: 'デスクトッププラグインフォルダーを開く',
     installModal: {
+      appGuidance: {
+        missing: (name: string) =>
+          `${name} がインストールされていません。このプラグインの前にバックエンドのコンピューターにインストールしてください。`,
+        oldVersion: (name: string, required: string, found: string) =>
+          `${name} ${required} 以降が必要です（検出: ${found || '古いバージョン'}）。バックエンドで更新してください。`,
+        unsupportedOs: (name: string) => `${name} はバックエンドの OS に対応していません。`,
+        unsupportedGpu: (name: string) => `バックエンドの GPU は ${name} に対応していません。`,
+        uncertain: (name: string) => `${name} を利用できるか確認できませんでした。プラグインのインストールを試せます。`,
+        notRunning: (name: string) =>
+          `${name} はインストールされていますが、対話型デスクトップセッションで実行されていません。`,
+        backendHost: '確認対象は接続先のバックエンドであり、この Desktop アプリではありません。',
+        download: (name: string) => `公式サイトから ${name} をダウンロード`,
+        recheck: '再確認',
+        askHermes: 'Hermes に相談',
+        helpDraft: (name: string, profile: string) =>
+          `バックエンドのコンピューターで ${profile} プロファイル用に ${name} をインストールまたは更新するのを手伝ってください。まず OS と要件を確認し、手順を説明して、変更やダウンロードの前に必ず許可を求めてください。`
+      },
       installUncertain:
         'Hermes はインストール結果の待機を終了しましたが、プラグインのインストールはまだ進行中の可能性があります。この画面を閉じ、再インストールする前にプラグイン一覧を再スキャンしてください。',
       installFromGit: 'Git からインストール',
@@ -44,11 +61,11 @@ export const jaPluginSettings = {
 
 /** Japanese copy for the Capabilities ▸ Plugins tab: the page blurb and a plugin's folder access. */
 export const jaPluginsTab = {
-  pageBlurb:
-    'プラグインはこのアプリ、エージェント、または両方を拡張できます。それぞれに独立したスイッチがあります。',
+  pageBlurb: 'プラグインはこのアプリ、エージェント、または両方を拡張できます。それぞれに独立したスイッチがあります。',
   folderAccess: {
     title: 'フォルダーへのアクセス',
-    hint: (name: string) => `${name} はこれらのフォルダー内のファイルを読み取り、変更できます。取り消しはすぐに反映されます。`,
+    hint: (name: string) =>
+      `${name} はこれらのフォルダー内のファイルを読み取り、変更できます。取り消しはすぐに反映されます。`,
     revoke: '取り消す',
     revokeLabel: (path: string) => `${path} へのアクセスを取り消す`,
     revoked: (name: string, path: string) => `${name} は ${path} を使用できなくなりました。`,
