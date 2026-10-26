@@ -2,28 +2,25 @@
  * Prune renderer-stored session references whose sessions no longer exist on
  * the backend.
  *
- * Pins (`hermes.desktop.pinnedSessions`), composer drafts
- * (`hermes:composer-drafts:v3`) and queued prompts
+ * Pins (`hermes.desktop.pinnedSessions`) and queued prompts
  * (`hermes.desktop.composerQueue.v1`) are keyed by session id and re-asserted
- * or probed at boot. When a session is removed from state.db (retention purge,
- * manual delete, another surface pruning it), those keys go stale: nothing
- * ever drops them, so every boot re-requests the dead ids and the gateway
- * answers `404 {"detail":"Session not found"}` once per stale reference,
- * forever.
+ * or probed at boot. When a session is removed from state.db, those keys go
+ * stale and repeatedly trigger 404s.
  *
  * This module sweeps for dead ids after the sidebar list has spoken. A session
  * is declared dead ONLY when a by-id probe 404s on every known profile of the
  * selected connection. A 404 proves nothing about another gateway. Pins are
- * already connection-scoped; globally keyed queued prompts and drafts require
- * an exact owner captured with the entry before they can be removed. Legacy
- * ownerless entries stay intact rather than guessing from a later session hint.
+ * already connection-scoped; globally keyed queued prompts require an exact
+ * owner captured with the entry before removal. Legacy ownerless entries stay.
+ * Draft text is never auto-pruned: the shared drafts map cannot atomically
+ * check an individual draft's owner and delete it without losing other windows'
+ * writes. Preserve unsent text until an atomic per-draft owner format exists.
  * Any non-404 probe failure (gateway mid-restart, network) is inconclusive:
  * the id is deferred to a later pass instead of being dropped.
  */
 
 import { getSession } from '@/hermes'
 import { mapPool } from '@/lib/pool'
-import { clearSessionDraftIfOwned, stashedDraftOwner, stashedDraftScopes } from '@/store/composer'
 import { $queuedPromptsBySession, clearQueuedPromptsIfOwned } from '@/store/composer-queue'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
@@ -77,13 +74,7 @@ function currentConnectionId(): string | undefined {
   return connection?.connectionId?.trim() || (connection?.mode === 'local' ? 'local' : undefined)
 }
 
-/** A global queue/draft key is prunable only with one exact persisted owner. */
-function ownedDraftProfile(id: string, connectionId: string): string | undefined {
-  const owner = stashedDraftOwner(id)
-
-  return owner?.connectionId === connectionId ? normalizeProfileKey(owner.profile) : undefined
-}
-
+/** A global queue key is prunable only with one exact persisted owner. */
 function ownedQueueProfile(id: string, connectionId: string): string | undefined {
   const entries = $queuedPromptsBySession.get()[id]
 
@@ -139,12 +130,6 @@ function collectCandidates(connectionId: string, profiles: readonly string[]): s
     }
   }
 
-  for (const scope of stashedDraftScopes()) {
-    if (!covered.has(scope) && profiles.includes(ownedDraftProfile(scope, connectionId) ?? '')) {
-      candidates.add(scope)
-    }
-  }
-
   for (const key of Object.keys($queuedPromptsBySession.get())) {
     if (!covered.has(key) && profiles.includes(ownedQueueProfile(key, connectionId) ?? '')) {
       candidates.add(key)
@@ -176,12 +161,7 @@ function dropDeadId(id: string, connectionId: string, profiles: readonly string[
     unpinSession(id)
   }
 
-  // No-ops for surfaces that don't hold the id — the guards also skip the
-  // localStorage write a no-op clear would still perform.
-  if (profiles.includes(ownedDraftProfile(id, connectionId) ?? '') && stashedDraftScopes().includes(id)) {
-    clearSessionDraftIfOwned(id, connectionId, profiles)
-  }
-
+  // Skip the localStorage write when there is no owned queue to clear.
   if (profiles.includes(ownedQueueProfile(id, connectionId) ?? '')) {
     clearQueuedPromptsIfOwned(id, connectionId, profiles)
   }

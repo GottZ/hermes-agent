@@ -16,13 +16,7 @@ vi.mock('@/hermes', async importOriginal => {
   }
 })
 
-import {
-  clearSessionDraft,
-  reloadPersistedDrafts,
-  stashedDraftOwner,
-  stashSessionDraft,
-  takeSessionDraft
-} from '@/store/composer'
+import { clearSessionDraft, reloadPersistedDrafts, stashSessionDraft, takeSessionDraft } from '@/store/composer'
 import {
   $queuedPromptsBySession,
   enqueueQueuedPrompt,
@@ -132,8 +126,9 @@ describe('__runDeadSessionPrunePass', () => {
     expect($pinnedSessionIds.get()).toEqual([])
   })
 
-  it('discards drafts for dead sessions but never the new-chat draft', async () => {
+  it('preserves typed drafts even after a same-backend 404, including new-chat text', async () => {
     $sessions.set([row('unrelated')])
+    $pinnedSessionIds.set(['dead-draft-session'])
     setSessionOwnerHint('dead-draft-session', { connectionId: 'local', profile: 'default' })
     stashSessionDraft('dead-draft-session', 'stale text', [])
     stashSessionDraft('__new__', 'brand new', [])
@@ -142,8 +137,13 @@ describe('__runDeadSessionPrunePass', () => {
 
     await __runDeadSessionPrunePass()
 
-    expect(takeSessionDraft('dead-draft-session').text).toBe('')
+    expect(getSessionMock).toHaveBeenCalledWith('dead-draft-session', { connectionId: 'local', profile: 'default' })
+    expect($pinnedSessionIds.get()).toEqual([])
+    expect(takeSessionDraft('dead-draft-session').text).toBe('stale text')
     expect(takeSessionDraft('__new__').text).toBe('brand new')
+    expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')['dead-draft-session']).toBe(
+      'stale text'
+    )
   })
 
   it('keeps a remote tile draft when a stale local hint contradicts its authoritative route', async () => {
@@ -153,11 +153,11 @@ describe('__runDeadSessionPrunePass', () => {
       ownerRoute: { connectionId: 'remote-a', profile: 'default' }
     })
     stashSessionDraft('tile-draft', 'remote unsent text', [])
-    expect(stashedDraftOwner('tile-draft')).toEqual({ connectionId: 'remote-a', profile: 'default' })
     getSessionMock.mockRejectedValue(notFound())
 
     await __runDeadSessionPrunePass()
 
+    expect(getSessionMock).not.toHaveBeenCalled()
     expect(takeSessionDraft('tile-draft').text).toBe('remote unsent text')
     expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')['tile-draft']).toBe(
       'remote unsent text'
@@ -222,23 +222,14 @@ describe('__runDeadSessionPrunePass', () => {
 
     await __runDeadSessionPrunePass()
 
+    expect(getSessionMock).not.toHaveBeenCalled()
     expect(takeSessionDraft('legacy-draft').text).toBe('keep unsent')
-  })
-
-  it('keeps a draft when persisted owner metadata is malformed', async () => {
-    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ 'unknown-draft': 'keep me' }))
-    window.localStorage.setItem('hermes:composer-drafts:v3.owners', 'null')
-    reloadPersistedDrafts()
-    getSessionMock.mockRejectedValue(notFound())
-
-    await __runDeadSessionPrunePass()
-
-    expect(takeSessionDraft('unknown-draft').text).toBe('keep me')
   })
 
   it('keeps a replacement draft written by another window during its dead probe', async () => {
     setSessionOwnerHint('race-draft', { connectionId: 'local', profile: 'default' })
     stashSessionDraft('race-draft', 'original', [])
+    $pinnedSessionIds.set(['race-draft'])
     let rejectProbe!: (reason: Error) => void
     getSessionMock.mockImplementation(
       () =>
@@ -258,11 +249,12 @@ describe('__runDeadSessionPrunePass', () => {
     )
   })
 
-  it('prunes one dead draft without overwriting an unrelated cross-window draft before its storage event', async () => {
+  it('preserves both a dead draft and an unrelated cross-window write before its storage event', async () => {
     setSessionOwnerHint('dead-a', { connectionId: 'local', profile: 'default' })
     setSessionOwnerHint('other-b', { connectionId: 'local', profile: 'default' })
     stashSessionDraft('dead-a', 'delete me', [])
     stashSessionDraft('other-b', 'old B', [])
+    $pinnedSessionIds.set(['dead-a'])
     let rejectProbe!: (reason: Error) => void
     getSessionMock.mockImplementationOnce(
       () =>
@@ -275,21 +267,14 @@ describe('__runDeadSessionPrunePass', () => {
     const pass = __runDeadSessionPrunePass()
     const texts = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')
     window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ ...texts, 'other-b': 'NEW B' }))
-    const owners = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3.owners') ?? '{}')
-    window.localStorage.setItem(
-      'hermes:composer-drafts:v3.owners',
-      JSON.stringify({ ...owners, 'other-b': { ...owners['other-b'], text: 'NEW B' } })
-    )
     rejectProbe(notFound())
     getSessionMock.mockRejectedValue(notFound())
     await pass
 
     const persisted = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')
-    expect(persisted['dead-a']).toBeUndefined()
+    expect(getSessionMock).toHaveBeenCalledWith('dead-a', { connectionId: 'local', profile: 'default' })
+    expect(persisted['dead-a']).toBe('delete me')
     expect(persisted['other-b']).toBe('NEW B')
-    expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3.owners') ?? '{}')['other-b']?.text).toBe(
-      'NEW B'
-    )
   })
 
   it('skips ids already covered by loaded sidebar rows', async () => {
