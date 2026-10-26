@@ -868,7 +868,8 @@ def _place_tree(entry, identifier: str, *, force: bool, ref: Optional[str], assu
         # Same pin rule as updates: commit or annotated-tag pin, case-insensitive.
         at_reviewed_pin = at_reviewed_pin and bool(installed) and catalog.at_catalog_pin(installed, entry.sha.lower())
         try:
-            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], None)
+            # Same app name as a fresh install at the pin (plugins_cmd_catalog passes the catalog title).
+            _refuse_unavailable_portable_plugin(on_disk[2], on_disk[0], (entry.title or None) if at_reviewed_pin else None)
         except _pc().PluginOperationError as exc:
             return _app_refusal_result(exc, entry, at_reviewed_pin=at_reviewed_pin)
         return on_disk

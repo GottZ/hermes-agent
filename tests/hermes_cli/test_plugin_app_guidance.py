@@ -93,8 +93,6 @@ def test_reviewed_catalog_metadata_requires_exact_pin_and_declared_app(monkeypat
     }}}}}
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: manifest)
     assert presence.app_guidance(reviewed, "missing_app")["download_url"] == "https://paint.example.com/download"
-    assert presence.app_guidance(reviewed, "unsupported_os")["app_title"] == "Paint Studio"
-    assert presence.app_guidance(reviewed, "unsupported_os")["download_url"] is None
     impostor = SimpleNamespace(**{**reviewed.__dict__, "sha": "b" * 40})
     assert presence.app_guidance(impostor, "missing_app")["download_url"] is None
     assert presence.app_guidance(impostor, "missing_app")["app_title"] == "paint-bridge"
@@ -210,6 +208,25 @@ def test_named_presence_reports_unsupported_backend_os_instead_of_hiding_row(mon
     row, = presence.presence_for(["game-editor"])
     assert row["state"] == "missing_app" and row["reason"] == "unsupported_os"
     assert row["download_url"] is None
+
+
+def test_guidance_without_a_link_reads_no_pinned_manifest(monkeypatch):
+    """A row that cannot show a vendor link never fetches the pin, even for an entry that has one."""
+    from hermes_cli import plugin_catalog as catalog
+    from hermes_platform.host.facts import os_family
+
+    entry = _catalog_entry("game-editor", title="Godot 4", app_download_url="https://godotengine.org/download/",
+                           platforms=["macos" if os_family() != "darwin" else "windows"])
+    reads = []
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [entry])
+    monkeypatch.setattr(presence, "_pinned_manifest", lambda *key: reads.append(key) or _manifest_for("godot"))
+    row, = presence.presence_for(["game-editor"])
+    assert (row["reason"], row["app_title"], row["download_url"]) == ("unsupported_os", "Godot 4", None)
+    for reason in ("unsupported_gpu", "app_not_running", "uncertain", "available", "no_requirements"):
+        assert presence.app_guidance(entry, reason, catalog=[entry])["download_url"] is None
+    assert reads == []
+    assert presence.app_guidance(entry, "missing_app", catalog=[entry])["download_url"] == "https://godotengine.org/download/"
+    assert len(reads) == 1
 
 
 def test_one_unreadable_server_does_not_make_other_present_server_look_sufficient(monkeypatch):
@@ -660,15 +677,19 @@ def test_disabled_tree_retry_uses_the_catalog_pin_rule(monkeypatch, tmp_path, re
     monkeypatch.setattr(install, "_catalog_install_on_disk", lambda *_: (tmp_path, {}, "nvidia-app"))
     monkeypatch.setattr(plugins_cmd_catalog, "catalog_install_record", lambda *_: record)
 
+    seen = {}
+
     def refused(name, tree, title):
+        seen["title"] = title
         error = PluginOperationError("app unavailable", failure_class="incompatible")
         error.app_guidance = {"reason": "missing_app", "app_title": name, "required_version": None,
                               "found_version": None, "download_url": None}
         raise error
 
-    seen = {}
     monkeypatch.setattr(install, "_refuse_unavailable_portable_plugin", refused)
     monkeypatch.setattr(install, "_app_refusal_result", lambda exc, ent, *, at_reviewed_pin: seen.update(
         at_pin=at_reviewed_pin) or {"ok": False})
     install._place_tree(entry, "source", force=False, ref=None, assume_deps_consent=True, step=lambda *_: None)
     assert seen["at_pin"] is at_pin
+    # The app is named as a fresh install at the pin names it; off the pin the catalog title may be another app.
+    assert seen["title"] == ("NVIDIA App" if at_pin else None)

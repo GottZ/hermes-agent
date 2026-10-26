@@ -98,11 +98,13 @@ def app_guidance(entry: Any, reason: str, *, required_version: str | None = None
 
     *app_title* is the name the caller already showed for the app; the vendor link never follows it."""
     # A link is offered only for missing_app / version_too_old, which only a required-app server
-    # produces; with exactly one such server that is the server it names, so none is passed.
-    reviewed = _reviewed_app(entry, actual_declaration, catalog=catalog)
+    # produces; with exactly one such server that is the server it names, so none is passed. Any
+    # other reason never shows a link, so it does not pay the pinned-manifest read the review needs.
+    reviewed = (_reviewed_app(entry, actual_declaration, catalog=catalog)
+                if reason in ("missing_app", "version_too_old") else None)
     return {"reason": reason, "app_title": reviewed.title if reviewed else (app_title or entry.name),
             "required_version": required_version, "found_version": found_version,
-            "download_url": reviewed.app_download_url if reviewed and reason in ("missing_app", "version_too_old") else None}
+            "download_url": reviewed.app_download_url if reviewed else None}
 
 
 def _raw_manifest_url(repo: str, sha: str, subdir: str) -> Optional[str]:
@@ -190,7 +192,9 @@ def presence(entry: Any) -> Presence:
     here = os_family()
     platforms = getattr(entry, "platforms", ())
     if platforms and here not in normalized_platforms(platforms):
-        return Presence("missing_app", f"not supported on {_OS_LABELS.get(here, here)}", "unsupported_os")
+        # The catalog's platform list is the plugin's, so the row's own title names it; no manifest read.
+        return Presence("missing_app", f"not supported on {_OS_LABELS.get(here, here)}", "unsupported_os",
+                        app_title=getattr(entry, "title", "") or entry.name)
 
     manifest = _pinned_manifest(entry.repo, entry.sha, entry.subdir)
     if not manifest:
