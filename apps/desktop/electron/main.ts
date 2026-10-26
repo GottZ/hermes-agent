@@ -16100,7 +16100,6 @@ async function dispatchRegistryApiRequest(
     fetch: (backend, requestPath, options) => fetchJsonForBackend(backend, requestPath, options),
     localRoute: registryLocalRouteForProfile,
     path: pathForRegistryBackendRequest,
-    poolKeys: () => backendPool.keys(),
     timeout: timeoutMs => resolveTimeoutMs(timeoutMs, DEFAULT_FETCH_TIMEOUT_MS),
     tag: tagRegistrySessionResponse
   })
