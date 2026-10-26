@@ -16,7 +16,6 @@ import { cn } from '@/lib/utils'
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
   $agentPluginsError,
   $agentPluginsErrorByOwner,
   $agentPluginsLoadingByOwner,
@@ -79,17 +78,13 @@ function cardInventory(
     sharedError: string | null
     sharedStatus: AgentPluginsStatus
     loadedProfile: string | null | undefined
-    loadedConnection: string | null | undefined
   }
 ) {
   const key = owner?.connectionId ? pluginInventoryKey(owner.connectionId, owner.profile) : null
 
   const rows = key
     ? state.snapshots[key]
-    : owner &&
-        state.loadedConnection === null &&
-        state.loadedProfile === owner.profile &&
-        state.sharedStatus === 'ready'
+    : owner && state.loadedProfile === owner.profile && state.sharedStatus === 'ready'
       ? state.shared
       : undefined
 
@@ -165,7 +160,6 @@ export function PluginsCard({
   const sharedError = useStore($agentPluginsError)
   const sharedStatus = useStore($agentPluginsStatus)
   const loadedProfile = useStore($agentPluginsProfile)
-  const loadedConnection = useStore($agentPluginsConnectionId)
   // The shared plugin list may be empty or another profile's: load the chat's own.
   useEffect(() => {
     if (owner) {
@@ -191,8 +185,7 @@ export function PluginsCard({
     shared,
     sharedError,
     sharedStatus,
-    loadedProfile,
-    loadedConnection
+    loadedProfile
   })
 
   const rows = presence.data ?? []

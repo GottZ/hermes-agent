@@ -55,7 +55,6 @@ import { queryClient } from '@/lib/query-client'
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
   $agentPluginsErrorByOwner,
   $agentPluginsLoadingByOwner,
   $agentPluginsProfile
@@ -72,7 +71,6 @@ beforeEach(() => {
   $agentPluginsErrorByOwner.set({})
   $agentPluginsLoadingByOwner.set({})
   $agentPluginsProfile.set(undefined)
-  $agentPluginsConnectionId.set(undefined)
   closePluginInstallRequest()
   $notifications.set([])
   routedRequest.mockReset()

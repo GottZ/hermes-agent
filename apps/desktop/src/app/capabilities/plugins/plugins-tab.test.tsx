@@ -9,12 +9,12 @@ import { queryClient } from '@/lib/query-client'
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
   $agentPluginsErrorByOwner,
   $agentPluginsLoadingByOwner,
   $agentPluginsProfile,
   $agentPluginsStatus,
-  loadAgentPlugins
+  loadAgentPlugins,
+  pluginInventoryKey
 } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
 import { $notifications } from '@/store/notifications'
@@ -127,7 +127,6 @@ beforeEach(() => {
   $agentPluginsByOwner.set({})
   $agentPluginsErrorByOwner.set({})
   $agentPluginsLoadingByOwner.set({})
-  $agentPluginsConnectionId.set(undefined)
   $agentPluginsProfile.set(undefined)
   $agentPluginsStatus.set('ready')
   $catalogCardView.set(false)
@@ -527,7 +526,6 @@ describe('PluginsTab', () => {
       }
     ])
     $agentPluginsProfile.set('workbot')
-    $agentPluginsConnectionId.set('cloud')
     await waitFor(() => expect(install.disabled).toBe(false))
   })
 
@@ -547,11 +545,13 @@ describe('PluginsTab', () => {
     })
     renderPlugins({ profile: { connectionId: 'local', profile: 'workbot' } })
     await selectCatalogEntry(weatherEntry.name)
-    await waitFor(() => expect($agentPluginsConnectionId.get()).toBe('local'))
+    await waitFor(() => expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')]).toHaveLength(1))
+    // The pinned list stays out of the shared one, which Settings reads by profile label alone.
+    expect($agentPluginsProfile.get()).toBeUndefined()
     expect(screen.queryByRole('button', { name: `Install ${weatherEntry.name}` })).toBeNull()
     expect(screen.getByRole('switch', { name: `Agent: ${weatherEntry.name}` })).toBeTruthy()
     $agentPlugins.set([])
-    $agentPluginsConnectionId.set('cloud')
+    $agentPluginsProfile.set('workbot')
     await waitFor(() => expect(screen.getByRole('switch', { name: `Agent: ${weatherEntry.name}` })).toBeTruthy())
   })
 

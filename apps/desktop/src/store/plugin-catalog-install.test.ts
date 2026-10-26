@@ -6,7 +6,6 @@ import { lookupPluginCatalogEntry, PLUGIN_CATALOG_URL, type PluginCatalogLookup 
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
   $agentPluginsProfile,
   $agentPluginsStatus,
   type AgentPluginRow,
@@ -176,7 +175,6 @@ describe('openCatalogPluginInstall', () => {
   it('says already installed for a legacy label only when the ambient list was loaded for it', () => {
     $agentPlugins.set([weather])
     $agentPluginsStatus.set('ready')
-    $agentPluginsConnectionId.set(null)
     $agentPluginsProfile.set('workbot')
 
     openCatalogPluginInstall({ name: 'weather', repo: 'https://github.com/x/weather' }, 'research')

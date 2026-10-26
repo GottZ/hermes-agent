@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
+  $agentPluginsError,
   $agentPluginsErrorByOwner,
   $agentPluginsLoadingByOwner,
   $agentPluginsProfile,
+  $agentPluginsStatus,
   type AgentPluginRow,
   installAgentPlugin,
   isDesktopRelevantPlugin,
@@ -24,15 +25,17 @@ const row = (partial: Partial<AgentPluginRow>): AgentPluginRow =>
 
 afterEach(() => {
   vi.useRealTimers()
+  $agentPlugins.set([])
+  $agentPluginsStatus.set('idle')
+  $agentPluginsError.set(null)
   $agentPluginsProfile.set(undefined)
-  $agentPluginsConnectionId.set(undefined)
   $agentPluginsByOwner.set({})
   $agentPluginsErrorByOwner.set({})
   $agentPluginsLoadingByOwner.set({})
 })
 
 describe('loadAgentPlugins connection ownership', () => {
-  it('does not coalesce same-named profiles across backends or publish a late foreign result', async () => {
+  it('does not coalesce same-named profiles across backends or publish either into the shared list', async () => {
     let finishCloud!: (value: { plugins: AgentPluginRow[] }) => void
     const cloud = vi.fn(() => new Promise<{ plugins: AgentPluginRow[] }>(resolve => { finishCloud = resolve }))
     const local = vi.fn(async () => ({ plugins: [row({ key: 'local-plugin' })] }))
@@ -43,9 +46,8 @@ describe('loadAgentPlugins connection ownership', () => {
     await slow
     expect(cloud).toHaveBeenCalledTimes(1)
     expect(local).toHaveBeenCalledTimes(1)
-    expect($agentPlugins.get().map(item => item.key)).toEqual(['local-plugin'])
-    expect($agentPluginsProfile.get()).toBe('workbot')
-    expect($agentPluginsConnectionId.get()).toBe('local')
+    expect($agentPlugins.get()).toEqual([])
+    expect($agentPluginsProfile.get()).toBeUndefined()
     expect($agentPluginsByOwner.get()[pluginInventoryKey('cloud', 'workbot')].map(item => item.key))
       .toEqual(['cloud-plugin'])
     expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')].map(item => item.key))
@@ -55,9 +57,9 @@ describe('loadAgentPlugins connection ownership', () => {
   it('does not let a pre-toggle list response undo a completed owner mutation', async () => {
     let finish!: (value: { plugins: AgentPluginRow[] }) => void
     const original = row({ key: 'weather', status: 'disabled' })
+    // The ambient backend's list for the same label is another backend's state.
     $agentPlugins.set([original])
     $agentPluginsProfile.set('workbot')
-    $agentPluginsConnectionId.set('local')
     $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [original] })
     const list = loadAgentPlugins(vi.fn(() => new Promise(resolve => { finish = resolve })) as never, 'workbot', 'local')
     const updated = row({ key: 'weather', status: 'enabled' })
@@ -69,7 +71,7 @@ describe('loadAgentPlugins connection ownership', () => {
     finish({ plugins: [original] })
     await list
     expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')][0].status).toBe('enabled')
-    expect($agentPlugins.get()[0].status).toBe('enabled')
+    expect($agentPlugins.get()[0].status).toBe('disabled')
   })
 
   it('starts a fresh owner list after install while an older pre-install list is in flight', async () => {
@@ -88,6 +90,33 @@ describe('loadAgentPlugins connection ownership', () => {
     await stale
     expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')].map(item => item.catalog_name))
       .toEqual(['weather'])
+  })
+
+  it('leaves the shared list, its label and its status to the ambient backend', async () => {
+    let finishAmbient!: (value: { plugins: AgentPluginRow[] }) => void
+
+    await loadAgentPlugins(vi.fn(async () => ({ plugins: [row({ key: 'ambient' })] })) as never, 'default')
+
+    const ambient = loadAgentPlugins(
+      vi.fn(() => new Promise<{ plugins: AgentPluginRow[] }>(resolve => { finishAmbient = resolve })) as never,
+      'default',
+      null,
+      { force: true }
+    )
+
+    // Settings reads the shared list by profile label: the same label on another backend must not land there.
+    await loadAgentPlugins(vi.fn(async () => ({ plugins: [row({ key: 'remote' })] })) as never, 'default', 'cloud')
+    expect($agentPlugins.get().map(item => item.key)).toEqual(['ambient'])
+    await loadAgentPlugins(vi.fn(async () => { throw new Error('cloud is unreachable') }) as never, 'default', 'cloud', {
+      force: true
+    })
+    finishAmbient({ plugins: [row({ key: 'ambient-2' })] })
+    await ambient
+    expect($agentPlugins.get().map(item => item.key)).toEqual(['ambient-2'])
+    expect($agentPluginsProfile.get()).toBe('default')
+    expect($agentPluginsStatus.get()).toBe('ready')
+    expect($agentPluginsError.get()).toBeNull()
+    expect($agentPluginsErrorByOwner.get()[pluginInventoryKey('cloud', 'default')]).toBe('cloud is unreachable')
   })
 
   it('retains owner A list failure even when owner B refreshes first', async () => {
@@ -110,7 +139,7 @@ describe('loadAgentPlugins connection ownership', () => {
     $agentPluginsByOwner.set({ [pluginInventoryKey('local', 'workbot')]: [row({ key: 'weather', version: '1' })] })
     const result = await updateAgentPlugin(request as never, 'weather', 'failed', 'workbot', {}, 'local')
     expect(result.kind).toBe('applied')
-    expect($agentPluginsConnectionId.get()).toBe('local')
+    expect($agentPluginsProfile.get()).toBeUndefined()
     expect($agentPluginsByOwner.get()[pluginInventoryKey('local', 'workbot')][0].version).toBe('2')
   })
 })

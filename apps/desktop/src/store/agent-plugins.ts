@@ -109,8 +109,6 @@ export const $agentPluginsError = atom<string | null>(null)
  *  settings must check it: the list is shared, and a scope switch keeps the
  *  previous profile's rows on screen until the new list lands. */
 export const $agentPluginsProfile = atom<null | string | undefined>(undefined)
-/** Exact connection owning the shared rows; same profile name on another backend is not enough. */
-export const $agentPluginsConnectionId = atom<null | string | undefined>(undefined)
 /** Owner-specific snapshots survive another surface refreshing a different backend's shared list. */
 export const $agentPluginsByOwner = atom<Record<string, AgentPluginRow[]>>({})
 /** A foreign list request must not erase this owner's failure signal. */
@@ -145,11 +143,13 @@ export const isDesktopRelevantPlugin = (row: AgentPluginRow): boolean => {
 
 let inflight: Promise<void> | null = null
 let inflightProfile: string | null = null
-let inflightConnectionId: string | null = null
 // Bumped per load so a slow response from a previous profile scope can't
 // overwrite the newer scope's list (async results can land out of order).
 let loadGeneration = 0
+// A pinned connection's list has its own in-flight request and generation per owner.
+const ownerInflight = new Map<string, Promise<void>>()
 const ownerGenerations = new Map<string, number>()
+let ownerGeneration = 0
 
 /** Invalidate a pre-mutation list without invalidating another owner's cache. */
 function invalidateListForMutation(profile: string | null | undefined, connectionId: string | null) {
@@ -158,14 +158,16 @@ function invalidateListForMutation(profile: string | null | undefined, connectio
   if (connectionId) {
     const key = pluginInventoryKey(connectionId, scope)
     ownerGenerations.delete(key)
+    ownerInflight.delete(key)
     $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [key]: false })
+
+    return
   }
 
-  if (inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
+  if (inflight && inflightProfile === scope) {
     ++loadGeneration
     inflight = null
     inflightProfile = null
-    inflightConnectionId = null
   }
 }
 
@@ -179,7 +181,8 @@ const withProfile = (params: Record<string, unknown>, profile?: string | null) =
  *  backend); concurrent callers for the SAME profile share one in-flight
  *  request — a different profile starts fresh so a scope switch can't get a
  *  stale list. Force after a completed install to bypass a pre-install read;
- *  owner generations keep its late result from replacing the new snapshot. */
+ *  owner generations keep its late result from replacing the new snapshot.
+ *  With a `connectionId` the rows land only in that owner's snapshot. */
 export function loadAgentPlugins(
   request: GatewayRequest,
   profile?: string | null,
@@ -188,21 +191,16 @@ export function loadAgentPlugins(
 ): Promise<void> {
   const scope = profile ?? null
 
-  if (!force && inflight && inflightProfile === scope && inflightConnectionId === connectionId) {
+  if (connectionId) {
+    return loadOwnerPlugins(request, scope, pluginInventoryKey(connectionId, scope), force)
+  }
+
+  if (!force && inflight && inflightProfile === scope) {
     return inflight
   }
 
   const generation = ++loadGeneration
-  const ownerKey = connectionId ? pluginInventoryKey(connectionId, scope) : null
-
-  if (ownerKey) {
-    ownerGenerations.set(ownerKey, generation)
-    $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
-    $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [ownerKey]: true })
-  }
-
   inflightProfile = scope
-  inflightConnectionId = connectionId
   inflight = (async () => {
     if ($agentPluginsStatus.get() !== 'ready') {
       $agentPluginsStatus.set('loading')
@@ -214,38 +212,15 @@ export function loadAgentPlugins(
         withProfile({ action: 'list' }, scope)
       )
 
-      const rows = (result?.plugins ?? []).map(normalizeAgentPluginRow)
-
-      if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
-        return
-      }
-
-      if (ownerKey) {
-        $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: rows })
-        $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [ownerKey]: null })
-      }
-
       if (generation !== loadGeneration) {
         return
       }
 
-      $agentPlugins.set(rows)
+      $agentPlugins.set((result?.plugins ?? []).map(normalizeAgentPluginRow))
       $agentPluginsProfile.set(scope)
-      $agentPluginsConnectionId.set(connectionId)
       $agentPluginsStatus.set('ready')
       $agentPluginsError.set(null)
     } catch (e) {
-      if (ownerKey && ownerGenerations.get(ownerKey) !== generation) {
-        return
-      }
-
-      if (ownerKey) {
-        $agentPluginsErrorByOwner.set({
-          ...$agentPluginsErrorByOwner.get(),
-          [ownerKey]: e instanceof Error ? e.message : String(e)
-        })
-      }
-
       if (generation !== loadGeneration) {
         return
       }
@@ -253,19 +228,62 @@ export function loadAgentPlugins(
       $agentPluginsError.set(e instanceof Error ? e.message : String(e))
       $agentPluginsStatus.set('error')
     } finally {
-      if (ownerKey && ownerGenerations.get(ownerKey) === generation) {
-        $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [ownerKey]: false })
-      }
-
       if (generation === loadGeneration) {
         inflight = null
         inflightProfile = null
-        inflightConnectionId = null
       }
     }
   })()
 
   return inflight
+}
+
+/** A pinned connection's list. The shared list stays the ambient backend's:
+ *  Settings, delegation, search and tool-media ownership read it by profile
+ *  label alone, so another backend's rows there would pass for their own. */
+function loadOwnerPlugins(request: GatewayRequest, scope: string | null, key: string, force: boolean): Promise<void> {
+  const pending = ownerInflight.get(key)
+
+  if (!force && pending) {
+    return pending
+  }
+
+  const generation = ++ownerGeneration
+  ownerGenerations.set(key, generation)
+  $agentPluginsErrorByOwner.set({ ...$agentPluginsErrorByOwner.get(), [key]: null })
+  $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [key]: true })
+
+  const load = (async () => {
+    try {
+      const result = await request<{ plugins?: AgentPluginRow[] }>(
+        'plugins.manage',
+        withProfile({ action: 'list' }, scope)
+      )
+
+      if (ownerGenerations.get(key) === generation) {
+        $agentPluginsByOwner.set({
+          ...$agentPluginsByOwner.get(),
+          [key]: (result?.plugins ?? []).map(normalizeAgentPluginRow)
+        })
+      }
+    } catch (e) {
+      if (ownerGenerations.get(key) === generation) {
+        $agentPluginsErrorByOwner.set({
+          ...$agentPluginsErrorByOwner.get(),
+          [key]: e instanceof Error ? e.message : String(e)
+        })
+      }
+    } finally {
+      if (ownerGenerations.get(key) === generation) {
+        $agentPluginsLoadingByOwner.set({ ...$agentPluginsLoadingByOwner.get(), [key]: false })
+        ownerInflight.delete(key)
+      }
+    }
+  })()
+
+  ownerInflight.set(key, load)
+
+  return load
 }
 
 /** Flip a backend plugin on/off and patch the row from the RPC's refreshed
@@ -305,14 +323,9 @@ export async function toggleAgentPlugin(
     const refreshed = result.plugin
     invalidateListForMutation(profile, connectionId)
 
-    // Patch only a list loaded for the profile this toggle targeted.
+    // Patch only the list this owner reads: its own snapshot, or the shared list loaded for its profile.
     if (refreshed) {
       const snapshot = normalizeAgentPluginRow(refreshed)
-
-      if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
-        $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
-        $agentPluginsStatus.set('ready')
-      }
 
       if (connectionId) {
         const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
@@ -324,6 +337,9 @@ export async function toggleAgentPlugin(
             [ownerKey]: owned.map(row => (row.key === key ? { ...row, ...snapshot } : row))
           })
         }
+      } else if ($agentPluginsProfile.get() === (profile ?? null)) {
+        $agentPlugins.set($agentPlugins.get().map(row => (row.key === key ? { ...row, ...snapshot } : row)))
+        $agentPluginsStatus.set('ready')
       }
     } else {
       await loadAgentPlugins(request, profile, connectionId)
@@ -567,10 +583,6 @@ export async function removeAgentPlugin(
 
     invalidateListForMutation(profile, connectionId)
 
-    if ($agentPluginsProfile.get() === (profile ?? null) && $agentPluginsConnectionId.get() === connectionId) {
-      $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
-    }
-
     if (connectionId) {
       const ownerKey = pluginInventoryKey(connectionId, profile ?? null)
       const owned = $agentPluginsByOwner.get()[ownerKey]
@@ -578,6 +590,8 @@ export async function removeAgentPlugin(
       if (owned) {
         $agentPluginsByOwner.set({ ...$agentPluginsByOwner.get(), [ownerKey]: owned.filter(row => row.name !== name) })
       }
+    } else if ($agentPluginsProfile.get() === (profile ?? null)) {
+      $agentPlugins.set($agentPlugins.get().filter(row => row.name !== name))
     }
 
     return true

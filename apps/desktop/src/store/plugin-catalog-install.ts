@@ -5,7 +5,6 @@ import { lookupPluginCatalogEntry, type PluginCatalogEntry, type PluginCatalogLo
 import {
   $agentPlugins,
   $agentPluginsByOwner,
-  $agentPluginsConnectionId,
   $agentPluginsProfile,
   $agentPluginsStatus,
   type AgentPluginRow,
@@ -25,11 +24,8 @@ function ownerInventory(profile: ProfileScope): AgentPluginRow[] | undefined {
     return $agentPluginsByOwner.get()[pluginInventoryKey(connectionId, label)]
   }
 
-  // The shared list proves a legacy label only when it was loaded for that label on the ambient backend.
-  const ambient =
-    $agentPluginsStatus.get() === 'ready' &&
-    $agentPluginsConnectionId.get() === null &&
-    $agentPluginsProfile.get() === label
+  // The shared list is the ambient backend's; it proves a legacy label only when loaded for that label.
+  const ambient = $agentPluginsStatus.get() === 'ready' && $agentPluginsProfile.get() === label
 
   return ambient ? $agentPlugins.get() : undefined
 }
