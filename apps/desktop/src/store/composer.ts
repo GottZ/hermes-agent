@@ -6,6 +6,7 @@ import { triggerHaptic } from '@/lib/haptics'
 import { persistString, storedString } from '@/lib/storage'
 
 import { recordDislike, recordFriction } from './desktop-metrics'
+import { getSessionOwnerHints } from './session'
 
 /** Release blob: chip previews created for OS image drops (see #63682). */
 export function revokeAttachmentPreviewUrl(url?: string | null) {
@@ -320,6 +321,39 @@ function loadPersistedDraftTexts(): [string, SessionDraft][] {
 }
 
 const draftsBySession = new Map<string, SessionDraft>(loadPersistedDraftTexts())
+const DRAFT_OWNERS_KEY = `${SESSION_DRAFTS_STORAGE_KEY}.owners`
+interface DraftOwnerRecord {
+  text: string
+  connectionId: string
+  profile: string
+}
+
+function loadDraftOwners(): Record<string, DraftOwnerRecord> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(DRAFT_OWNERS_KEY) ?? '{}')
+
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, DraftOwnerRecord>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+let draftOwners = loadDraftOwners()
+
+/** Absent on legacy drafts or when an exact owner was not known at stash time. */
+export function stashedDraftOwner(scope: string): { connectionId: string; profile: string } | undefined {
+  const record = draftOwners[scope]
+  const draft = draftsBySession.get(scope)
+
+  return record &&
+    draft?.text === record.text &&
+    typeof record.connectionId === 'string' &&
+    typeof record.profile === 'string'
+    ? { connectionId: record.connectionId, profile: record.profile }
+    : undefined
+}
 
 /**
  * Patch one asynchronous attachment occurrence wherever the main composer owns
@@ -408,6 +442,7 @@ function publishDraftTitle(key: string, title: string): void {
  */
 export function reloadPersistedDrafts(): void {
   const incoming = new Map(loadPersistedDraftTexts())
+  draftOwners = loadDraftOwners()
 
   for (const [key, draft] of incoming) {
     const local = draftsBySession.get(key)
@@ -428,7 +463,7 @@ export function reloadPersistedDrafts(): void {
 // same origin, so the other window's write is the sync signal.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', event => {
-    if (event.key === SESSION_DRAFTS_STORAGE_KEY) {
+    if (event.key === SESSION_DRAFTS_STORAGE_KEY || event.key === DRAFT_OWNERS_KEY) {
       reloadPersistedDrafts()
     }
   })
@@ -481,6 +516,9 @@ function persistDraftTexts() {
       .slice(-MAX_PERSISTED_DRAFTS)
       .map(([key, draft]) => [key, draft.text] as const)
 
+    draftOwners = Object.fromEntries(entries.flatMap(([key]) => (draftOwners[key] ? [[key, draftOwners[key]!]] : [])))
+    window.localStorage.setItem(DRAFT_OWNERS_KEY, JSON.stringify(draftOwners))
+
     if (entries.length === 0) {
       window.localStorage.removeItem(SESSION_DRAFTS_STORAGE_KEY)
     } else {
@@ -493,6 +531,17 @@ function persistDraftTexts() {
 
 export function stashSessionDraft(scope: string | null | undefined, text: string, attachments: ComposerAttachment[]) {
   const key = draftKey(scope)
+  const hints = getSessionOwnerHints(key)
+  const owner = hints.length === 1 ? hints[0] : undefined
+  const nextOwners = { ...draftOwners }
+
+  if ((text.trim() || attachments.length > 0) && owner?.connectionId) {
+    nextOwners[key] = { connectionId: owner.connectionId, profile: owner.targetProfile ?? owner.profile, text }
+  } else {
+    delete nextOwners[key]
+  }
+
+  draftOwners = nextOwners
 
   // Delete-then-set keeps MRU order for MAX_PERSISTED_DRAFTS eviction.
   draftsBySession.delete(key)
@@ -516,6 +565,41 @@ export function takeSessionDraft(scope: string | null | undefined): SessionDraft
 }
 
 export const clearSessionDraft = (scope: string | null | undefined) => stashSessionDraft(scope, '', [])
+
+/** Prune only when the persisted text still matches the owner-stamped draft.
+ * A second window can replace the text before its storage event arrives. */
+export function clearSessionDraftIfOwned(scope: string, connectionId: string, profiles: readonly string[]): boolean {
+  const owner = stashedDraftOwner(scope)
+  const record = draftOwners[scope]
+
+  if (!owner || owner.connectionId !== connectionId || !profiles.includes(owner.profile) || !record) {
+    return false
+  }
+
+  try {
+    const persisted = JSON.parse(window.localStorage.getItem(SESSION_DRAFTS_STORAGE_KEY) ?? '{}') as Record<
+      string,
+      string
+    >
+
+    const persistedOwners = loadDraftOwners()
+
+    if (
+      persisted[scope] !== record.text ||
+      persistedOwners[scope]?.text !== record.text ||
+      persistedOwners[scope]?.connectionId !== connectionId ||
+      persistedOwners[scope]?.profile !== owner.profile
+    ) {
+      return false
+    }
+  } catch {
+    return false
+  }
+
+  clearSessionDraft(scope)
+
+  return true
+}
 
 /**
  * Stored draft scopes that hold content, excluding the new-chat key. The

@@ -12,20 +12,22 @@
  * forever.
  *
  * This module sweeps for dead ids after the sidebar list has spoken. A session
- * is declared dead ONLY when a by-id probe 404s on every known profile — a 404
- * is profile-scoped ("not on this profile's state.db"), so a single miss never
- * prunes anything (a session can legitimately live on a non-active profile).
+ * is declared dead ONLY when a by-id probe 404s on every known profile of the
+ * selected connection. A 404 proves nothing about another gateway. Pins are
+ * already connection-scoped; globally keyed queued prompts and drafts require
+ * an exact owner captured with the entry before they can be removed. Legacy
+ * ownerless entries stay intact rather than guessing from a later session hint.
  * Any non-404 probe failure (gateway mid-restart, network) is inconclusive:
  * the id is deferred to a later pass instead of being dropped.
  */
 
 import { getSession } from '@/hermes'
 import { mapPool } from '@/lib/pool'
-import { clearSessionDraft, stashedDraftScopes } from '@/store/composer'
-import { $queuedPromptsBySession, clearQueuedPrompts } from '@/store/composer-queue'
+import { clearSessionDraftIfOwned, stashedDraftOwner, stashedDraftScopes } from '@/store/composer'
+import { $queuedPromptsBySession, clearQueuedPromptsIfOwned } from '@/store/composer-queue'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
-import { $sessions } from '@/store/session'
+import { $connection, $sessions } from '@/store/session'
 
 import { forgetPinSyncState } from './session-pin-sync'
 
@@ -44,7 +46,7 @@ const ALIVE_TTL_MS = 10 * 60_000
 // sweeps skip re-probing ids whose verdict is still fresh.
 const alive = new Map<string, number>()
 // Ids currently mid-probe, so overlapping sweeps don't double-probe.
-const inFlight = new Set<string>()
+const inFlight = new Map<string, number>()
 
 let listLoaded = false
 // Bumped by resetDeadSessionPrune: in-flight probes from a pre-reset sweep
@@ -63,48 +65,45 @@ function isNotFoundError(error: unknown): boolean {
 
 /**
  * A stored id is dead only if a by-id lookup 404s on the active profile AND on
- * every named profile. The active-scope probe covers single-profile installs;
- * named-profile probes rule out sessions living on another profile.
+ * every named profile of this connection. Pin the connection explicitly so an
+ * unrelated same-id hint cannot redirect the probe to another backend.
  *
- * Completeness assumption: `$profiles` is the same profile list the UI uses to
- * route and resolve sessions (resolveStoredSession, the picker). A session on
- * a profile the app does not know about is unreachable in the UI — it cannot
- * be opened, pinned, or drafted — so ids stored locally always reference a
- * listed profile. When the list is EMPTY (not yet loaded) nothing is declared
- * dead: another profile we can't rule out might own the id.
+ * `$profiles` is the currently served backend's picker list. If no list has
+ * loaded, or the active profile is absent, a missing profile is inconclusive.
  */
-async function sessionVerdict(id: string): Promise<Verdict> {
+function currentConnectionId(): string | undefined {
+  const connection = $connection.get()
+
+  return connection?.connectionId?.trim() || (connection?.mode === 'local' ? 'local' : undefined)
+}
+
+/** A global queue/draft key is prunable only with one exact persisted owner. */
+function ownedDraftProfile(id: string, connectionId: string): string | undefined {
+  const owner = stashedDraftOwner(id)
+
+  return owner?.connectionId === connectionId ? normalizeProfileKey(owner.profile) : undefined
+}
+
+function ownedQueueProfile(id: string, connectionId: string): string | undefined {
+  const entries = $queuedPromptsBySession.get()[id]
+
+  if (!entries?.length || entries.some(entry => entry.ownerRoute?.connectionId !== connectionId)) {
+    return undefined
+  }
+
+  const profiles = new Set(entries.map(entry => normalizeProfileKey(entry.ownerRoute?.profile)))
+
+  return profiles.size === 1 ? [...profiles][0] : undefined
+}
+
+async function sessionVerdict(id: string, profiles: readonly string[], connectionId: string): Promise<Verdict> {
   const activeKey = normalizeProfileKey($activeGatewayProfile.get())
 
-  // No known profiles → another profile we can't rule out might own the id.
-  // Skip the probe entirely; there is nothing to gain from a lone unscoped hit.
-  if ($profiles.get().length === 0) {
-    return 'unknown'
-  }
-
-  try {
-    await getSession(id)
-
-    return 'alive'
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      return 'unknown'
-    }
-  }
-
-  const knownProfiles = [...new Set($profiles.get().map(profile => normalizeProfileKey(profile.name)))]
-
-  // Without the profile list we can't rule out another profile — defer rather
-  // than risk pruning a session that lives elsewhere.
-  const otherProfiles = knownProfiles.filter(key => key !== activeKey)
-
-  if (knownProfiles.length === 0) {
-    return 'unknown'
-  }
-
-  for (const profile of otherProfiles) {
+  for (const profile of [activeKey, ...profiles.filter(key => key !== activeKey)]) {
     try {
-      await getSession(id, profile)
+      // Pin BOTH axes. A session owner hint must not reroute a pin's probe
+      // to another gateway, and an ambient dial may change during the await.
+      await getSession(id, { connectionId, profile })
 
       return 'alive'
     } catch (error) {
@@ -118,7 +117,7 @@ async function sessionVerdict(id: string): Promise<Verdict> {
 }
 
 /** Stored ids no loaded sidebar row covers — the only ids that can be dead. */
-function collectCandidates(): string[] {
+function collectCandidates(connectionId: string, profiles: readonly string[]): string[] {
   const rows = $sessions.get()
   const covered = new Set<string>()
 
@@ -141,13 +140,13 @@ function collectCandidates(): string[] {
   }
 
   for (const scope of stashedDraftScopes()) {
-    if (!covered.has(scope)) {
+    if (!covered.has(scope) && profiles.includes(ownedDraftProfile(scope, connectionId) ?? '')) {
       candidates.add(scope)
     }
   }
 
   for (const key of Object.keys($queuedPromptsBySession.get())) {
-    if (!covered.has(key)) {
+    if (!covered.has(key) && profiles.includes(ownedQueueProfile(key, connectionId) ?? '')) {
       candidates.add(key)
     }
   }
@@ -159,7 +158,7 @@ function collectCandidates(): string[] {
   })
 }
 
-function dropDeadId(id: string): void {
+function dropDeadId(id: string, connectionId: string, profiles: readonly string[]): void {
   // Cheap re-verification before destructive drops: if a row for this id
   // appeared while the probe was in flight (a session resurrected or a slow
   // page landed), the id is no longer dead — keep every entry.
@@ -179,12 +178,12 @@ function dropDeadId(id: string): void {
 
   // No-ops for surfaces that don't hold the id — the guards also skip the
   // localStorage write a no-op clear would still perform.
-  if (stashedDraftScopes().includes(id)) {
-    clearSessionDraft(id)
+  if (profiles.includes(ownedDraftProfile(id, connectionId) ?? '') && stashedDraftScopes().includes(id)) {
+    clearSessionDraftIfOwned(id, connectionId, profiles)
   }
 
-  if ($queuedPromptsBySession.get()[id]?.length) {
-    clearQueuedPrompts(id)
+  if (profiles.includes(ownedQueueProfile(id, connectionId) ?? '')) {
+    clearQueuedPromptsIfOwned(id, connectionId, profiles)
   }
 }
 
@@ -198,14 +197,28 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
   }
 
   const sweepEpoch = epoch
-  const candidates = collectCandidates()
+  const connection = $connection.get()
+  const connectionId = currentConnectionId()
+
+  if (!connectionId) {
+    return
+  }
+
+  const profiles = [...new Set($profiles.get().map(profile => normalizeProfileKey(profile.name)))]
+  const activeProfile = normalizeProfileKey($activeGatewayProfile.get())
+
+  if (profiles.length === 0 || !profiles.includes(activeProfile)) {
+    return
+  }
+
+  const candidates = collectCandidates(connectionId, profiles)
 
   if (candidates.length === 0) {
     return
   }
 
   for (const id of candidates) {
-    inFlight.add(id)
+    inFlight.set(id, sweepEpoch)
   }
 
   try {
@@ -214,24 +227,35 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
         return
       }
 
-      const verdict = await sessionVerdict(id)
+      const verdict = await sessionVerdict(id, profiles, connectionId)
 
       // A gateway switch (reset) while this probe was in flight invalidates
       // the verdict — it is about the backend we measured, not the live one.
-      if (epoch !== sweepEpoch) {
+      if (
+        epoch !== sweepEpoch ||
+        $connection.get() !== connection ||
+        currentConnectionId() !== connectionId ||
+        normalizeProfileKey($activeGatewayProfile.get()) !== activeProfile ||
+        $profiles
+          .get()
+          .map(profile => normalizeProfileKey(profile.name))
+          .join('\0') !== profiles.join('\0')
+      ) {
         return
       }
 
       if (verdict === 'alive') {
         alive.set(id, Date.now() + ALIVE_TTL_MS)
       } else if (verdict === 'dead') {
-        dropDeadId(id)
+        dropDeadId(id, connectionId, profiles)
       }
       // 'unknown' — neither cached nor dropped; a later sweep retries it.
     })
   } finally {
     for (const id of candidates) {
-      inFlight.delete(id)
+      if (inFlight.get(id) === sweepEpoch) {
+        inFlight.delete(id)
+      }
     }
   }
 }

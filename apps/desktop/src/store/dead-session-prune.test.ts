@@ -3,22 +3,30 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type * as HermesModule from '@/hermes'
 import type { ProfileInfo, SessionInfo } from '@/types/hermes'
 
-const getSessionMock = vi.fn<(id: string, profile?: null | string) => Promise<SessionInfo>>()
+const getSessionMock =
+  vi.fn<(id: string, profile?: null | string | { connectionId: string; profile: string }) => Promise<SessionInfo>>()
 
 vi.mock('@/hermes', async importOriginal => {
   const actual = await importOriginal<typeof HermesModule>()
 
   return {
     ...actual,
-    getSession: (id: string, profile?: null | string) => getSessionMock(id, profile)
+    getSession: (id: string, profile?: null | string | { connectionId: string; profile: string }) =>
+      getSessionMock(id, profile)
   }
 })
 
-import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
-import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts } from '@/store/composer-queue'
+import { clearSessionDraft, reloadPersistedDrafts, stashSessionDraft, takeSessionDraft } from '@/store/composer'
+import {
+  $queuedPromptsBySession,
+  enqueueQueuedPrompt,
+  getQueuedPrompts,
+  simulateComposerQueueReloadForTests
+} from '@/store/composer-queue'
+import { wipeSessionListsForGatewaySwitch } from '@/store/gateway-switch'
 import { $pinnedSessionIds } from '@/store/layout'
 import { $activeGatewayProfile, $profiles } from '@/store/profile'
-import { $sessions } from '@/store/session'
+import { $sessions, _resetSessionOwnerHintsForTests, setConnection, setSessionOwnerHint } from '@/store/session'
 
 import { __runDeadSessionPrunePass, resetDeadSessionPrune, watchDeadSessionPrune } from './dead-session-prune'
 
@@ -45,12 +53,15 @@ beforeAll(() => {
 
 beforeEach(() => {
   window.localStorage.clear()
+  reloadPersistedDrafts()
+  setConnection({ connectionId: 'local', mode: 'local', baseUrl: 'http://localhost' } as never)
   $sessions.set([])
   $pinnedSessionIds.set([])
   $queuedPromptsBySession.set({})
   $profiles.set([profile('default'), profile('work')])
   $activeGatewayProfile.set('default')
   getSessionMock.mockReset()
+  _resetSessionOwnerHintsForTests({ storage: true })
   resetDeadSessionPrune()
 })
 
@@ -72,15 +83,15 @@ describe('__runDeadSessionPrunePass', () => {
 
     expect($pinnedSessionIds.get()).toEqual([])
     // Active-scope probe first, then each other profile.
-    expect(getSessionMock).toHaveBeenCalledWith('dead-pin', undefined)
-    expect(getSessionMock).toHaveBeenCalledWith('dead-pin', 'work')
+    expect(getSessionMock).toHaveBeenCalledWith('dead-pin', { connectionId: 'local', profile: 'default' })
+    expect(getSessionMock).toHaveBeenCalledWith('dead-pin', { connectionId: 'local', profile: 'work' })
   })
 
   it('keeps a pin whose session lives on another profile, and caches it as alive', async () => {
     $sessions.set([row('unrelated')])
     $pinnedSessionIds.set(['other-pin'])
     getSessionMock.mockImplementation(async (id, profileName) => {
-      if (profileName === 'work') {
+      if (typeof profileName === 'object' && profileName?.profile === 'work') {
         return row(id, { profile: 'work' })
       }
 
@@ -115,8 +126,10 @@ describe('__runDeadSessionPrunePass', () => {
 
   it('discards drafts for dead sessions but never the new-chat draft', async () => {
     $sessions.set([row('unrelated')])
+    setSessionOwnerHint('dead-draft-session', { connectionId: 'local', profile: 'default' })
     stashSessionDraft('dead-draft-session', 'stale text', [])
     stashSessionDraft('__new__', 'brand new', [])
+    reloadPersistedDrafts()
     getSessionMock.mockRejectedValue(notFound())
 
     await __runDeadSessionPrunePass()
@@ -127,11 +140,12 @@ describe('__runDeadSessionPrunePass', () => {
 
   it('drops queued prompts for dead sessions and keeps live ones', async () => {
     $sessions.set([row('unrelated')])
+    setSessionOwnerHint('dead-queue-session', { connectionId: 'local', profile: 'default' })
     enqueueQueuedPrompt('dead-queue-session', { text: 'go', attachments: [] })
     enqueueQueuedPrompt('live-queue-session', { text: 'stay', attachments: [] })
     getSessionMock.mockImplementation(async (id, profileName) => {
       if (id === 'live-queue-session') {
-        return row(id, { profile: profileName ?? 'default' })
+        return row(id, { profile: typeof profileName === 'object' ? profileName?.profile : (profileName ?? 'default') })
       }
 
       throw notFound()
@@ -143,6 +157,81 @@ describe('__runDeadSessionPrunePass', () => {
     expect(getQueuedPrompts('live-queue-session')).toHaveLength(1)
   })
 
+  it('prunes a confirmed dead owned queue after reloading its persisted route', async () => {
+    setSessionOwnerHint('persisted-dead', { connectionId: 'local', profile: 'work' })
+    enqueueQueuedPrompt('persisted-dead', { text: 'stale pending', attachments: [] })
+    simulateComposerQueueReloadForTests()
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(getQueuedPrompts('persisted-dead')).toEqual([])
+    expect(getSessionMock).toHaveBeenCalledWith('persisted-dead', { connectionId: 'local', profile: 'work' })
+  })
+
+  it('preserves a legacy persisted queue even if a later same-id owner hint appears', async () => {
+    window.localStorage.setItem(
+      'hermes.desktop.composerQueue.v1',
+      JSON.stringify({
+        'legacy-session': [{ id: 'legacy-entry', text: 'do not lose me', attachments: [], queuedAt: 1 }]
+      })
+    )
+    simulateComposerQueueReloadForTests()
+    setSessionOwnerHint('legacy-session', { connectionId: 'local', profile: 'default' })
+    $pinnedSessionIds.set(['legacy-session'])
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(getQueuedPrompts('legacy-session').map(entry => entry.text)).toEqual(['do not lose me'])
+    expect($pinnedSessionIds.get()).toEqual([])
+  })
+
+  it('preserves a legacy draft when a later hint cannot establish its original owner', async () => {
+    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ 'legacy-draft': 'keep unsent' }))
+    // Reload through the public draft-sync path, not by writing module internals.
+    reloadPersistedDrafts()
+    setSessionOwnerHint('legacy-draft', { connectionId: 'local', profile: 'default' })
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(takeSessionDraft('legacy-draft').text).toBe('keep unsent')
+  })
+
+  it('keeps a draft when persisted owner metadata is malformed', async () => {
+    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ 'unknown-draft': 'keep me' }))
+    window.localStorage.setItem('hermes:composer-drafts:v3.owners', 'null')
+    reloadPersistedDrafts()
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(takeSessionDraft('unknown-draft').text).toBe('keep me')
+  })
+
+  it('keeps a replacement draft written by another window during its dead probe', async () => {
+    setSessionOwnerHint('race-draft', { connectionId: 'local', profile: 'default' })
+    stashSessionDraft('race-draft', 'original', [])
+    let rejectProbe!: (reason: Error) => void
+    getSessionMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectProbe = reject
+        })
+    )
+
+    const pass = __runDeadSessionPrunePass()
+    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ 'race-draft': 'replacement' }))
+    rejectProbe(notFound())
+    getSessionMock.mockRejectedValue(notFound())
+    await pass
+
+    expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')['race-draft']).toBe(
+      'replacement'
+    )
+  })
+
   it('skips ids already covered by loaded sidebar rows', async () => {
     $sessions.set([row('covered', { _lineage_root_id: 'root-covered' })])
     $pinnedSessionIds.set(['covered', 'root-covered', 'rowless-pin'])
@@ -152,7 +241,7 @@ describe('__runDeadSessionPrunePass', () => {
 
     expect(getSessionMock).not.toHaveBeenCalledWith('covered', expect.anything())
     expect(getSessionMock).not.toHaveBeenCalledWith('root-covered', expect.anything())
-    expect(getSessionMock).toHaveBeenCalledWith('rowless-pin', undefined)
+    expect(getSessionMock).toHaveBeenCalledWith('rowless-pin', { connectionId: 'local', profile: 'default' })
     // Covered pins are alive (their rows exist) — only the rowless pin dies.
     expect($pinnedSessionIds.get()).toEqual(['covered', 'root-covered'])
   })
@@ -181,7 +270,7 @@ describe('__runDeadSessionPrunePass', () => {
     await __runDeadSessionPrunePass()
 
     expect($pinnedSessionIds.get()).toEqual([])
-    expect(getSessionMock).toHaveBeenCalledWith('orphan-pin', undefined)
+    expect(getSessionMock).toHaveBeenCalledWith('orphan-pin', { connectionId: 'local', profile: 'default' })
   })
 
   it('re-probes an alive id once its verdict TTL expires', async () => {
@@ -191,7 +280,7 @@ describe('__runDeadSessionPrunePass', () => {
       $sessions.set([row('unrelated')])
       $pinnedSessionIds.set(['ttl-pin'])
       getSessionMock.mockImplementation(async (id, profileName) => {
-        if (profileName === 'work') {
+        if (typeof profileName === 'object' && profileName?.profile === 'work') {
           return row(id, { profile: 'work' })
         }
 
@@ -243,8 +332,55 @@ describe('__runDeadSessionPrunePass', () => {
 
     await __runDeadSessionPrunePass()
 
-    expect(getSessionMock).toHaveBeenCalledWith('race-pin', undefined)
+    expect(getSessionMock).toHaveBeenCalledWith('race-pin', { connectionId: 'local', profile: 'default' })
     expect($pinnedSessionIds.get()).toEqual([])
+  })
+
+  it('does not clear a newly written unknown queue while a dead probe is in flight', async () => {
+    setSessionOwnerHint('race-queue', { connectionId: 'local', profile: 'default' })
+    enqueueQueuedPrompt('race-queue', { text: 'original', attachments: [] })
+    let rejectProbe!: (reason: Error) => void
+    getSessionMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectProbe = reject
+        })
+    )
+
+    const pass = __runDeadSessionPrunePass()
+    window.localStorage.setItem(
+      'hermes.desktop.composerQueue.v1',
+      JSON.stringify({
+        'race-queue': [{ id: 'new-from-other-window', text: 'keep me', attachments: [], queuedAt: 2 }]
+      })
+    )
+    rejectProbe(notFound())
+    getSessionMock.mockRejectedValue(notFound())
+    await pass
+
+    expect(
+      JSON.parse(window.localStorage.getItem('hermes.desktop.composerQueue.v1') ?? '{}')['race-queue']?.[0]?.text
+    ).toBe('keep me')
+  })
+
+  it('discards a stale 404 when a connection descriptor changes without a prune reset', async () => {
+    setSessionOwnerHint('route-race', { connectionId: 'local', profile: 'default' })
+    enqueueQueuedPrompt('route-race', { text: 'pending', attachments: [] })
+    let rejectProbe!: (reason: Error) => void
+    getSessionMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectProbe = reject
+        })
+    )
+
+    const pass = __runDeadSessionPrunePass()
+    setConnection({ connectionId: 'remote-race', mode: 'remote', baseUrl: 'https://race.example' } as never)
+    rejectProbe(notFound())
+    getSessionMock.mockRejectedValue(notFound())
+    await pass
+
+    expect(getQueuedPrompts('route-race').map(entry => entry.text)).toEqual(['pending'])
   })
 
   it('resetDeadSessionPrune drops the alive cache so a switched gateway is re-probed', async () => {
@@ -267,6 +403,38 @@ describe('__runDeadSessionPrunePass', () => {
 })
 
 describe('watchDeadSessionPrune', () => {
+  it('keeps the original gateway queue and draft after a switch and real scheduled prune', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      $sessions.set([row('local-session')])
+      setSessionOwnerHint('local-session', { connectionId: 'local', profile: 'work' })
+      enqueueQueuedPrompt('local-session', { text: 'unsent follow-up', attachments: [] })
+      stashSessionDraft('local-session', 'unsent draft', [])
+      $pinnedSessionIds.set(['local-session'])
+
+      wipeSessionListsForGatewaySwitch()
+      setConnection({ connectionId: 'remote-a', mode: 'remote', baseUrl: 'https://remote.example' } as never)
+      $profiles.set([profile('default'), profile('work')])
+      getSessionMock.mockRejectedValue(notFound())
+      $sessions.set([row('remote-session')])
+
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      expect(getQueuedPrompts('local-session').map(entry => entry.text)).toEqual(['unsent follow-up'])
+      expect(takeSessionDraft('local-session').text).toBe('unsent draft')
+      expect(getSessionMock).not.toHaveBeenCalledWith('local-session', expect.anything())
+      setConnection({ connectionId: 'local', mode: 'local', baseUrl: 'http://localhost' } as never)
+      expect($pinnedSessionIds.get()).toEqual(['local-session'])
+      expect(getQueuedPrompts('local-session').map(entry => entry.text)).toEqual(['unsent follow-up'])
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
   it('sweeps once after the first list payload', async () => {
     vi.useFakeTimers()
     const unsubscribe = watchDeadSessionPrune()
