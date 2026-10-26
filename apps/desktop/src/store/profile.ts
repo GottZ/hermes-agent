@@ -94,6 +94,9 @@ export function setActiveProfile(name: string): void {
 // no longer writes the shared cache ("guard against the past").
 let profileListEpoch = 0
 let freshProfileList: null | { epoch: number; profiles: ProfileInfo[]; source: string } = null
+// Only an accepted HTTP roster advances this signal. Cached picker paint and
+// stale responses cannot wake a pin pass.
+export const $freshProfileRosterRevision = atom(0)
 
 /** Only an accepted HTTP roster from this source in the current routing epoch
  * can authorize destructive decisions. The picker may display cached lists. */
@@ -149,6 +152,10 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
               source !== null && routedSource === source && ambientOwnerConnectionId() === source
                 ? { epoch, profiles, source }
                 : null
+
+            if (freshProfileList) {
+              $freshProfileRosterRevision.set($freshProfileRosterRevision.get() + 1)
+            }
           })
         }
 

@@ -17,7 +17,12 @@
 import { getSession } from '@/hermes'
 import { mapPool } from '@/lib/pool'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
-import { $activeGatewayProfile, freshProfileRoster, normalizeProfileKey } from '@/store/profile'
+import {
+  $activeGatewayProfile,
+  $freshProfileRosterRevision,
+  freshProfileRoster,
+  normalizeProfileKey
+} from '@/store/profile'
 import { $connection, $sessions } from '@/store/session'
 
 import { forgetPinSyncState } from './session-pin-sync'
@@ -51,9 +56,22 @@ let sweepTimer: ReturnType<typeof setTimeout> | undefined
 type Verdict = 'alive' | 'dead' | 'unknown'
 
 function isNotFoundError(error: unknown): boolean {
-  // The renderer HTTP transports prefix failures with the response status.
-  // The JSON detail alone is not proof: a proxy may return it with 403/500.
-  return /^404:\s/.test(error instanceof Error ? error.message : String(error))
+  // The HTTP transport prefixes status and raw response body. A route/proxy
+  // 404 is not proof that the session detail endpoint looked up this id.
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /^404:\s+(.+)$/s.exec(message)
+
+  if (!match) {
+    return false
+  }
+
+  try {
+    const body: unknown = JSON.parse(match[1])
+
+    return typeof body === 'object' && body !== null && 'detail' in body && body.detail === 'Session not found'
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -214,44 +232,58 @@ export function __runDeadSessionPrunePass(): Promise<void> {
   return sweepOnce(false)
 }
 
+/** Schedule a bounded pass after a sidebar change or an accepted fresh roster. */
+function scheduleSweep(delay: number): void {
+  // Clamp to the EARLIEST change since the last pass: constant list churn
+  // must delay the sweep, not starve it.
+  const dueAt = Date.now() + delay
+  const nextDueAt = sweepTimer ? Math.min(sweepDueAt, dueAt) : dueAt
+
+  if (sweepTimer && nextDueAt !== sweepDueAt) {
+    clearTimeout(sweepTimer)
+    sweepTimer = undefined
+  }
+
+  sweepDueAt = nextDueAt
+
+  // Exactly one timer at a time: a churn that doesn't move the deadline
+  // keeps the existing timer instead of stacking a second one.
+  if (!sweepTimer) {
+    sweepTimer = setTimeout(
+      () => {
+        sweepDueAt = 0
+        sweepTimer = undefined
+        void sweepOnce()
+      },
+      Math.max(0, nextDueAt - Date.now())
+    )
+  }
+}
+
 /**
- * Sweep after the first sidebar payload, then re-sweep (debounced) whenever
- * the list changes — a purge while the app is running heals within one pass.
- * Call once per app, next to `watchSessionPins`. Returns the store unsubscribe
- * (used by tests).
+ * Sweep after the first sidebar payload, then on later list changes and
+ * accepted fresh rosters. A roster arriving after the first pass must wake
+ * the sweep even when the sidebar list keeps its reference identity.
  */
 export function watchDeadSessionPrune(): () => void {
-  return $sessions.listen(() => {
+  const unlistenSessions = $sessions.listen(() => {
     const firstPayload = !listLoaded
     listLoaded = true
+    scheduleSweep(firstPayload ? FIRST_PASS_DELAY_MS : RERUN_DELAY_MS)
+  })
 
-    const delay = firstPayload ? FIRST_PASS_DELAY_MS : RERUN_DELAY_MS
+  const unlistenRoster = $freshProfileRosterRevision.listen(() => {
+    const connectionId = currentConnectionId()
 
-    // Clamp to the EARLIEST change since the last pass: constant list churn
-    // must delay the sweep, not starve it.
-    const dueAt = Date.now() + delay
-    const nextDueAt = sweepTimer ? Math.min(sweepDueAt, dueAt) : dueAt
-
-    if (sweepTimer && nextDueAt !== sweepDueAt) {
-      clearTimeout(sweepTimer)
-      sweepTimer = undefined
-    }
-
-    sweepDueAt = nextDueAt
-
-    // Exactly one timer at a time: a churn that doesn't move the deadline
-    // keeps the existing timer instead of stacking a second one.
-    if (!sweepTimer) {
-      sweepTimer = setTimeout(
-        () => {
-          sweepDueAt = 0
-          sweepTimer = undefined
-          void sweepOnce()
-        },
-        Math.max(0, nextDueAt - Date.now())
-      )
+    if (listLoaded && connectionId && freshProfileRoster(connectionId)) {
+      scheduleSweep(RERUN_DELAY_MS)
     }
   })
+
+  return () => {
+    unlistenSessions()
+    unlistenRoster()
+  }
 }
 
 /**

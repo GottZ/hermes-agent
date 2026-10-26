@@ -144,6 +144,19 @@ describe('__runDeadSessionPrunePass', () => {
     expect(getSessionMock).toHaveBeenCalledTimes(1)
   })
 
+  it.each(['404: {"detail":"Not Found"}', '404: <html>route missing</html>', '404: Session not found'])(
+    'keeps a pin on an inconclusive HTTP 404 (%s)',
+    async message => {
+      $pinnedSessionIds.set(['uncertain-pin'])
+      getSessionMock.mockRejectedValue(new Error(message))
+
+      await __runDeadSessionPrunePass()
+
+      expect($pinnedSessionIds.get()).toEqual(['uncertain-pin'])
+      expect(getSessionMock).toHaveBeenCalledTimes(1)
+    }
+  )
+
   it('waits for a fresh roster on return to a previously cached but incomplete connection', async () => {
     setApiRequestConnection('source-a')
     setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
@@ -531,6 +544,96 @@ describe('__runDeadSessionPrunePass', () => {
 })
 
 describe('watchDeadSessionPrune', () => {
+  it('retries the pin pass when a fresh roster arrives after the first sweep without a new sidebar list', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      setApiRequestConnection('source-a')
+      setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
+      const stableRows = [row('unrelated')]
+      $sessions.set(stableRows)
+      $pinnedSessionIds.set(['late-pin'])
+      getSessionMock.mockRejectedValue(notFound())
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(getSessionMock).not.toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual(['late-pin'])
+
+      await refreshProfiles()
+      expect($sessions.get()).toBe(stableRows)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect($pinnedSessionIds.get()).toEqual([])
+      expect(getSessionMock).toHaveBeenCalledWith('late-pin', { connectionId: 'source-a', profile: 'work' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not retry from cached paint or an HTTP roster fetched through a foreign route', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      setApiRequestConnection('source-b')
+      setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
+      $sessions.set([row('unrelated')])
+      $pinnedSessionIds.set(['foreign-roster-pin'])
+      getSessionMock.mockRejectedValue(notFound())
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      // A successful HTTP response reached the picker, but its routed source
+      // was different from the selected connection. It is not prune authority.
+      await refreshProfiles()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(getSessionMock).not.toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual(['foreign-roster-pin'])
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not schedule a pin pass from a roster stranded by a profile switch during refresh', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      setApiRequestConnection('source-a')
+      setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
+      $sessions.set([row('unrelated')])
+      $pinnedSessionIds.set(['switched-profile-pin'])
+      getSessionMock.mockRejectedValue(notFound())
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      let finishRefresh!: (value: { profiles: ProfileInfo[] }) => void
+      getProfilesMock.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finishRefresh = resolve
+          })
+      )
+      const oldRefresh = refreshProfiles()
+      $activeGatewayProfile.set('work')
+      finishRefresh({ profiles: [profile('default'), profile('work')] })
+      await oldRefresh
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(getSessionMock).not.toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual(['switched-profile-pin'])
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the original gateway queue and draft after a switch and real scheduled prune', async () => {
     vi.useFakeTimers()
     const unsubscribe = watchDeadSessionPrune()
