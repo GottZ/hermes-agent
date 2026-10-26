@@ -400,6 +400,7 @@ function useCatalogAppCheck(requestGateway: GatewayRequest, catalogName: string 
       return
     }
 
+    // Each run retires every older check, a manual recheck included, and is the only one left to clear the flag.
     const intent = ++checkIntent.current
     setGuidance(null)
     setCheckingApp(true)
@@ -444,10 +445,7 @@ function useCatalogAppCheck(requestGateway: GatewayRequest, catalogName: string 
     guidance,
     setGuidance,
     checkingApp,
-    recheckApp,
-    invalidate: () => {
-      checkIntent.current++
-    }
+    recheckApp
   }
 }
 
@@ -520,7 +518,7 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
   const [installError, setInstallError] = useState<null | string>(null)
   const [installUncertain, setInstallUncertain] = useState(false)
 
-  const { guidance, setGuidance, checkingApp, recheckApp, invalidate } = useCatalogAppCheck(
+  const { guidance, setGuidance, checkingApp, recheckApp } = useCatalogAppCheck(
     requestGateway,
     request.catalogName,
     targetProfile
@@ -636,10 +634,7 @@ function InstallView({ request, installing, onInstallingChange }: InstallViewPro
               value: targetProfile,
               label: targetLabel,
               options: targetInfo ? profiles : [...profiles, { name: targetProfile }],
-              onChange: profile => {
-                invalidate()
-                setTargetProfile(profile)
-              }
+              onChange: setTargetProfile
             }}
             remote={remote}
             request={request}
