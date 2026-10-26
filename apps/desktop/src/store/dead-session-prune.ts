@@ -2,26 +2,20 @@
  * Prune renderer-stored session references whose sessions no longer exist on
  * the backend.
  *
- * Pins (`hermes.desktop.pinnedSessions`) and queued prompts
- * (`hermes.desktop.composerQueue.v1`) are keyed by session id and re-asserted
- * or probed at boot. When a session is removed from state.db, those keys go
- * stale and repeatedly trigger 404s.
+ * Connection-scoped pins (`hermes.desktop.pinnedSessions`) can go stale when a
+ * session is removed from state.db and repeatedly trigger 404s at boot.
  *
  * This module sweeps for dead ids after the sidebar list has spoken. A session
  * is declared dead ONLY when a by-id probe 404s on every known profile of the
- * selected connection. A 404 proves nothing about another gateway. Pins are
- * already connection-scoped; globally keyed queued prompts require an exact
- * owner captured with the entry before removal. Legacy ownerless entries stay.
- * Draft text is never auto-pruned: the shared drafts map cannot atomically
- * check an individual draft's owner and delete it without losing other windows'
- * writes. Preserve unsent text until an atomic per-draft owner format exists.
+ * selected connection. A 404 proves nothing about another gateway. Global
+ * drafts and queued prompts are NEVER auto-pruned: their shared localStorage
+ * maps cannot atomically delete one entry without losing another window's write.
  * Any non-404 probe failure (gateway mid-restart, network) is inconclusive:
  * the id is deferred to a later pass instead of being dropped.
  */
 
 import { getSession } from '@/hermes'
 import { mapPool } from '@/lib/pool'
-import { $queuedPromptsBySession, clearQueuedPromptsIfOwned } from '@/store/composer-queue'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
 import { $connection, $sessions } from '@/store/session'
@@ -74,19 +68,6 @@ function currentConnectionId(): string | undefined {
   return connection?.connectionId?.trim() || (connection?.mode === 'local' ? 'local' : undefined)
 }
 
-/** A global queue key is prunable only with one exact persisted owner. */
-function ownedQueueProfile(id: string, connectionId: string): string | undefined {
-  const entries = $queuedPromptsBySession.get()[id]
-
-  if (!entries?.length || entries.some(entry => entry.ownerRoute?.connectionId !== connectionId)) {
-    return undefined
-  }
-
-  const profiles = new Set(entries.map(entry => normalizeProfileKey(entry.ownerRoute?.profile)))
-
-  return profiles.size === 1 ? [...profiles][0] : undefined
-}
-
 async function sessionVerdict(id: string, profiles: readonly string[], connectionId: string): Promise<Verdict> {
   const activeKey = normalizeProfileKey($activeGatewayProfile.get())
 
@@ -108,7 +89,7 @@ async function sessionVerdict(id: string, profiles: readonly string[], connectio
 }
 
 /** Stored ids no loaded sidebar row covers — the only ids that can be dead. */
-function collectCandidates(connectionId: string, profiles: readonly string[]): string[] {
+function collectCandidates(): string[] {
   const rows = $sessions.get()
   const covered = new Set<string>()
 
@@ -122,28 +103,14 @@ function collectCandidates(connectionId: string, profiles: readonly string[]): s
     }
   }
 
-  const candidates = new Set<string>()
-
-  for (const id of $pinnedSessionIds.get()) {
-    if (!covered.has(id)) {
-      candidates.add(id)
-    }
-  }
-
-  for (const key of Object.keys($queuedPromptsBySession.get())) {
-    if (!covered.has(key) && profiles.includes(ownedQueueProfile(key, connectionId) ?? '')) {
-      candidates.add(key)
-    }
-  }
-
-  return [...candidates].filter(id => {
+  return $pinnedSessionIds.get().filter(id => {
     const expiresAt = alive.get(id)
 
-    return !(expiresAt !== undefined && Date.now() < expiresAt) && !inFlight.has(id)
+    return !covered.has(id) && !(expiresAt !== undefined && Date.now() < expiresAt) && !inFlight.has(id)
   })
 }
 
-function dropDeadId(id: string, connectionId: string, profiles: readonly string[]): void {
+function dropDeadId(id: string): void {
   // Cheap re-verification before destructive drops: if a row for this id
   // appeared while the probe was in flight (a session resurrected or a slow
   // page landed), the id is no longer dead — keep every entry.
@@ -159,11 +126,6 @@ function dropDeadId(id: string, connectionId: string, profiles: readonly string[
   if ($pinnedSessionIds.get().includes(id)) {
     forgetPinSyncState(id)
     unpinSession(id)
-  }
-
-  // Skip the localStorage write when there is no owned queue to clear.
-  if (profiles.includes(ownedQueueProfile(id, connectionId) ?? '')) {
-    clearQueuedPromptsIfOwned(id, connectionId, profiles)
   }
 }
 
@@ -191,7 +153,7 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
     return
   }
 
-  const candidates = collectCandidates(connectionId, profiles)
+  const candidates = collectCandidates()
 
   if (candidates.length === 0) {
     return
@@ -227,7 +189,7 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
       if (verdict === 'alive') {
         alive.set(id, Date.now() + ALIVE_TTL_MS)
       } else if (verdict === 'dead') {
-        dropDeadId(id, connectionId, profiles)
+        dropDeadId(id)
       }
       // 'unknown' — neither cached nor dropped; a later sweep retries it.
     })

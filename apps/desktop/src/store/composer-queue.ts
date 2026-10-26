@@ -37,8 +37,6 @@ export interface RemoveQueuedPromptOptions {
 
 export interface QueuedPromptEntry {
   id: string
-  /** Exact owner captured at enqueue; absent on legacy persisted entries. */
-  ownerRoute?: { connectionId: string; profile: string }
   serverStatus?: string
   /** The queued-row verbs the owner serves for a server row (`steer`, `replace`); none from an
    *  owner that predates them. Projected from the pending snapshot, never set locally. */
@@ -298,7 +296,8 @@ const mutateSession = (sid: string, op: (queue: QueuedPromptEntry[]) => null | Q
 
 /** Replace one session's queue wholesale (canonical receipt reconciliation),
  *  through the same live-merge path as every other mutation. */
-export const writeSessionQueue = (sid: string, queue: QueuedPromptEntry[]): boolean => mutateSession(sid, () => queue)
+export const writeSessionQueue = (sid: string, queue: QueuedPromptEntry[]): boolean =>
+  mutateSession(sid, () => queue)
 
 if (typeof window !== 'undefined') {
   // Cross-window sync (#46732): every desktop window boots the queue atom from
@@ -360,13 +359,8 @@ export const enqueueQueuedPrompt = (
     return null
   }
 
-  const owner = knownOwnerForSession(sid)
-
   const entry: QueuedPromptEntry = {
     id: payload.id ?? nextId(),
-    ...(owner && typeof owner === 'object' && owner.connectionId?.trim()
-      ? { ownerRoute: { connectionId: owner.connectionId, profile: owner.targetProfile ?? owner.profile } }
-      : {}),
     text: payload.text,
     ...(payload.displayText ? { displayText: payload.displayText } : {}),
     ...(payload.displayKind ? { displayKind: payload.displayKind } : {}),
@@ -590,25 +584,6 @@ export const clearQueuedPrompts = (key: string | null | undefined) => {
     return []
   })
 }
-
-/** Re-check the live persisted queue before a destructive dead-session clear. */
-export const clearQueuedPromptsIfOwned = (sid: string, connectionId: string, profiles: readonly string[]): boolean =>
-  mutateSession(sid, queue => {
-    if (
-      !queue.length ||
-      queue.some(
-        entry => entry.ownerRoute?.connectionId !== connectionId || !profiles.includes(entry.ownerRoute.profile)
-      )
-    ) {
-      return null
-    }
-
-    for (const entry of queue) {
-      revokeAttachmentPreviewUrls(entry.attachments)
-    }
-
-    return []
-  })
 
 /**
  * Move pending entries from a dead session key onto a live one, preserving FIFO

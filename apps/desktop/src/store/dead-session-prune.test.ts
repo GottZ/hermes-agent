@@ -164,35 +164,36 @@ describe('__runDeadSessionPrunePass', () => {
     )
   })
 
-  it('drops queued prompts for dead sessions and keeps live ones', async () => {
+  it('preserves a same-backend queued prompt and draft on 404 while pruning its pin', async () => {
     $sessions.set([row('unrelated')])
+    $pinnedSessionIds.set(['dead-queue-session'])
     setSessionOwnerHint('dead-queue-session', { connectionId: 'local', profile: 'default' })
     enqueueQueuedPrompt('dead-queue-session', { text: 'go', attachments: [] })
-    enqueueQueuedPrompt('live-queue-session', { text: 'stay', attachments: [] })
-    getSessionMock.mockImplementation(async (id, profileName) => {
-      if (id === 'live-queue-session') {
-        return row(id, { profile: typeof profileName === 'object' ? profileName?.profile : (profileName ?? 'default') })
-      }
-
-      throw notFound()
-    })
-
-    await __runDeadSessionPrunePass()
-
-    expect(getQueuedPrompts('dead-queue-session')).toEqual([])
-    expect(getQueuedPrompts('live-queue-session')).toHaveLength(1)
-  })
-
-  it('prunes a confirmed dead owned queue after reloading its persisted route', async () => {
-    setSessionOwnerHint('persisted-dead', { connectionId: 'local', profile: 'work' })
-    enqueueQueuedPrompt('persisted-dead', { text: 'stale pending', attachments: [] })
-    simulateComposerQueueReloadForTests()
+    stashSessionDraft('dead-queue-session', 'unsent', [])
+    const queueBefore = window.localStorage.getItem('hermes.desktop.composerQueue.v1')
+    const draftBefore = window.localStorage.getItem('hermes:composer-drafts:v3')
     getSessionMock.mockRejectedValue(notFound())
 
     await __runDeadSessionPrunePass()
 
-    expect(getQueuedPrompts('persisted-dead')).toEqual([])
-    expect(getSessionMock).toHaveBeenCalledWith('persisted-dead', { connectionId: 'local', profile: 'work' })
+    expect($pinnedSessionIds.get()).toEqual([])
+    expect(getQueuedPrompts('dead-queue-session').map(entry => entry.text)).toEqual(['go'])
+    expect(window.localStorage.getItem('hermes.desktop.composerQueue.v1')).toBe(queueBefore)
+    expect(window.localStorage.getItem('hermes:composer-drafts:v3')).toBe(draftBefore)
+  })
+
+  it('does not probe or prune a persisted queue without a pin', async () => {
+    setSessionOwnerHint('persisted-dead', { connectionId: 'local', profile: 'work' })
+    enqueueQueuedPrompt('persisted-dead', { text: 'stale pending', attachments: [] })
+    simulateComposerQueueReloadForTests()
+    const persisted = window.localStorage.getItem('hermes.desktop.composerQueue.v1')
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(getQueuedPrompts('persisted-dead').map(entry => entry.text)).toEqual(['stale pending'])
+    expect(window.localStorage.getItem('hermes.desktop.composerQueue.v1')).toBe(persisted)
+    expect(getSessionMock).not.toHaveBeenCalled()
   })
 
   it('preserves a legacy persisted queue even if a later same-id owner hint appears', async () => {
@@ -211,6 +212,19 @@ describe('__runDeadSessionPrunePass', () => {
 
     expect(getQueuedPrompts('legacy-session').map(entry => entry.text)).toEqual(['do not lose me'])
     expect($pinnedSessionIds.get()).toEqual([])
+  })
+
+  it('keeps foreign-gateway queue entries under a same-id pin on the selected connection', async () => {
+    setSessionOwnerHint('collision', { connectionId: 'remote-b', profile: 'work' })
+    enqueueQueuedPrompt('collision', { text: 'remote work', attachments: [] })
+    $pinnedSessionIds.set(['collision'])
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(getSessionMock).toHaveBeenCalledWith('collision', { connectionId: 'local', profile: 'default' })
+    expect($pinnedSessionIds.get()).toEqual([])
+    expect(getQueuedPrompts('collision').map(entry => entry.text)).toEqual(['remote work'])
   })
 
   it('preserves a legacy draft when a later hint cannot establish its original owner', async () => {
@@ -381,9 +395,10 @@ describe('__runDeadSessionPrunePass', () => {
     expect($pinnedSessionIds.get()).toEqual([])
   })
 
-  it('does not clear a newly written unknown queue while a dead probe is in flight', async () => {
+  it('keeps cross-window queue writes during a pin probe without rewriting storage', async () => {
     setSessionOwnerHint('race-queue', { connectionId: 'local', profile: 'default' })
     enqueueQueuedPrompt('race-queue', { text: 'original', attachments: [] })
+    $pinnedSessionIds.set(['race-queue'])
     let rejectProbe!: (reason: Error) => void
     getSessionMock.mockImplementation(
       () =>
@@ -393,24 +408,33 @@ describe('__runDeadSessionPrunePass', () => {
     )
 
     const pass = __runDeadSessionPrunePass()
-    window.localStorage.setItem(
-      'hermes.desktop.composerQueue.v1',
-      JSON.stringify({
-        'race-queue': [{ id: 'new-from-other-window', text: 'keep me', attachments: [], queuedAt: 2 }]
-      })
-    )
+    const fromOtherWindow = JSON.stringify({
+      'race-queue': [
+        {
+          id: 'new-from-other-window',
+          text: 'keep me',
+          attachments: [],
+          queuedAt: 2,
+          ownerRoute: { connectionId: 'local', profile: 'default' }
+        }
+      ],
+      'other-session': [{ id: 'other-entry', text: 'also keep', attachments: [], queuedAt: 2 }]
+    })
+    window.localStorage.setItem('hermes.desktop.composerQueue.v1', fromOtherWindow)
     rejectProbe(notFound())
     getSessionMock.mockRejectedValue(notFound())
     await pass
 
-    expect(
-      JSON.parse(window.localStorage.getItem('hermes.desktop.composerQueue.v1') ?? '{}')['race-queue']?.[0]?.text
-    ).toBe('keep me')
+    expect($pinnedSessionIds.get()).toEqual([])
+    expect(window.localStorage.getItem('hermes.desktop.composerQueue.v1')).toBe(fromOtherWindow)
+    simulateComposerQueueReloadForTests()
+    expect(getQueuedPrompts('race-queue').map(entry => entry.text)).toEqual(['keep me'])
   })
 
   it('discards a stale 404 when a connection descriptor changes without a prune reset', async () => {
     setSessionOwnerHint('route-race', { connectionId: 'local', profile: 'default' })
     enqueueQueuedPrompt('route-race', { text: 'pending', attachments: [] })
+    $pinnedSessionIds.set(['route-race'])
     let rejectProbe!: (reason: Error) => void
     getSessionMock.mockImplementation(
       () =>
@@ -425,6 +449,7 @@ describe('__runDeadSessionPrunePass', () => {
     getSessionMock.mockRejectedValue(notFound())
     await pass
 
+    expect(getSessionMock).toHaveBeenCalledWith('route-race', { connectionId: 'local', profile: 'default' })
     expect(getQueuedPrompts('route-race').map(entry => entry.text)).toEqual(['pending'])
   })
 
