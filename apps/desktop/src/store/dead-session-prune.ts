@@ -74,20 +74,18 @@ function isNotFoundError(error: unknown): boolean {
   }
 }
 
-/**
- * A stored id is dead only if a by-id lookup 404s on the active profile AND on
- * every named profile of this connection. Pin the connection explicitly so an
- * unrelated same-id hint cannot redirect the probe to another backend.
- *
- * A fresh successful roster from this connection and routing epoch is required;
- * the picker list can be restored from cache after a switch.
- */
+/** The selected connection's registry id; a local connection without one is `local`, a remote one has none. */
 function currentConnectionId(): string | undefined {
   const connection = $connection.get()
 
   return connection?.connectionId?.trim() || (connection?.mode === 'local' ? 'local' : undefined)
 }
 
+/**
+ * A stored id is dead only if a by-id lookup 404s on the active profile AND on
+ * every named profile of this connection. Pin the connection explicitly so an
+ * unrelated same-id hint cannot redirect the probe to another backend.
+ */
 async function sessionVerdict(id: string, profiles: readonly string[], connectionId: string): Promise<Verdict> {
   const activeKey = normalizeProfileKey($activeGatewayProfile.get())
 
@@ -166,6 +164,8 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
     return
   }
 
+  // A fresh successful roster from this connection and routing epoch is required;
+  // the picker list can be restored from cache after a switch.
   const freshRoster = freshProfileRoster(connectionId)
 
   if (!freshRoster) {
