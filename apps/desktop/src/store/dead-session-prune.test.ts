@@ -1,16 +1,20 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiRequestConnection } from '@/api/client'
 import type * as HermesModule from '@/hermes'
 import type { ProfileInfo, SessionInfo } from '@/types/hermes'
 
 const getSessionMock =
   vi.fn<(id: string, profile?: null | string | { connectionId: string; profile: string }) => Promise<SessionInfo>>()
 
+const getProfilesMock = vi.fn<() => Promise<{ profiles: ProfileInfo[] }>>()
+
 vi.mock('@/hermes', async importOriginal => {
   const actual = await importOriginal<typeof HermesModule>()
 
   return {
     ...actual,
+    getProfiles: () => getProfilesMock(),
     getSession: (id: string, profile?: null | string | { connectionId: string; profile: string }) =>
       getSessionMock(id, profile)
   }
@@ -25,7 +29,7 @@ import {
 } from '@/store/composer-queue'
 import { wipeSessionListsForGatewaySwitch } from '@/store/gateway-switch'
 import { $pinnedSessionIds } from '@/store/layout'
-import { $activeGatewayProfile, $profiles } from '@/store/profile'
+import { $activeGatewayProfile, $profiles, refreshProfiles } from '@/store/profile'
 import { $sessions, _resetSessionOwnerHintsForTests, setConnection, setSessionOwnerHint } from '@/store/session'
 import { $sessionTiles, openSessionTile } from '@/store/session-states'
 
@@ -52,7 +56,8 @@ beforeAll(() => {
   ;(window as unknown as { hermesDesktop: unknown }).hermesDesktop = {}
 })
 
-beforeEach(() => {
+beforeEach(async () => {
+  setApiRequestConnection(null)
   window.localStorage.clear()
   reloadPersistedDrafts()
   setConnection({ connectionId: 'local', mode: 'local', baseUrl: 'http://localhost' } as never)
@@ -61,6 +66,9 @@ beforeEach(() => {
   $queuedPromptsBySession.set({})
   $profiles.set([profile('default'), profile('work')])
   $activeGatewayProfile.set('default')
+  getProfilesMock.mockReset()
+  getProfilesMock.mockResolvedValue({ profiles: [profile('default'), profile('work')] })
+  await refreshProfiles()
   getSessionMock.mockReset()
   _resetSessionOwnerHintsForTests({ storage: true })
   $sessionTiles.set([])
@@ -124,6 +132,54 @@ describe('__runDeadSessionPrunePass', () => {
     await __runDeadSessionPrunePass()
 
     expect($pinnedSessionIds.get()).toEqual([])
+  })
+
+  it.each([403, 500])('does not treat HTTP %i with a Session not found detail as a 404', async status => {
+    $pinnedSessionIds.set(['error-pin'])
+    getSessionMock.mockRejectedValue(new Error(`${status}: {"detail":"Session not found"}`))
+
+    await __runDeadSessionPrunePass()
+
+    expect($pinnedSessionIds.get()).toEqual(['error-pin'])
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for a fresh roster on return to a previously cached but incomplete connection', async () => {
+    setApiRequestConnection('source-a')
+    setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
+    getProfilesMock.mockResolvedValueOnce({ profiles: [profile('default')] })
+    await refreshProfiles()
+    setApiRequestConnection('source-b')
+    setConnection({ connectionId: 'source-b', mode: 'remote', baseUrl: 'https://b.example' } as never)
+    setApiRequestConnection('source-a')
+    setConnection({ connectionId: 'source-a', mode: 'remote', baseUrl: 'https://a.example' } as never)
+    expect($profiles.get().map(p => p.name)).toEqual(['default']) // cached paint, not authority
+    $pinnedSessionIds.set(['remote-pin'])
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+    expect($pinnedSessionIds.get()).toEqual(['remote-pin'])
+    expect(getSessionMock).not.toHaveBeenCalled()
+
+    getProfilesMock.mockResolvedValueOnce({ profiles: [profile('default'), profile('work')] })
+    await refreshProfiles()
+    getSessionMock.mockImplementation(async (id, route) => {
+      if (typeof route === 'object' && route?.profile === 'work') {
+        return row(id)
+      }
+
+      throw notFound()
+    })
+    await __runDeadSessionPrunePass()
+    expect(getSessionMock).toHaveBeenCalledWith('remote-pin', { connectionId: 'source-a', profile: 'work' })
+    expect($pinnedSessionIds.get()).toEqual(['remote-pin'])
+
+    getSessionMock.mockRejectedValue(notFound())
+    $pinnedSessionIds.set(['truly-dead'])
+    await __runDeadSessionPrunePass()
+    expect($pinnedSessionIds.get()).toEqual([])
+    expect(getSessionMock).toHaveBeenCalledWith('truly-dead', { connectionId: 'source-a', profile: 'default' })
+    expect(getSessionMock).toHaveBeenCalledWith('truly-dead', { connectionId: 'source-a', profile: 'work' })
   })
 
   it('preserves typed drafts even after a same-backend 404, including new-chat text', async () => {
@@ -408,6 +464,7 @@ describe('__runDeadSessionPrunePass', () => {
     )
 
     const pass = __runDeadSessionPrunePass()
+
     const fromOtherWindow = JSON.stringify({
       'race-queue': [
         {
@@ -420,6 +477,7 @@ describe('__runDeadSessionPrunePass', () => {
       ],
       'other-session': [{ id: 'other-entry', text: 'also keep', attachments: [], queuedAt: 2 }]
     })
+
     window.localStorage.setItem('hermes.desktop.composerQueue.v1', fromOtherWindow)
     rejectProbe(notFound())
     getSessionMock.mockRejectedValue(notFound())

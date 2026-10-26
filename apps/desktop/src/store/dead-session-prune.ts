@@ -17,7 +17,7 @@
 import { getSession } from '@/hermes'
 import { mapPool } from '@/lib/pool'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
-import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
+import { $activeGatewayProfile, freshProfileRoster, normalizeProfileKey } from '@/store/profile'
 import { $connection, $sessions } from '@/store/session'
 
 import { forgetPinSyncState } from './session-pin-sync'
@@ -51,7 +51,9 @@ let sweepTimer: ReturnType<typeof setTimeout> | undefined
 type Verdict = 'alive' | 'dead' | 'unknown'
 
 function isNotFoundError(error: unknown): boolean {
-  return /session not found/i.test(error instanceof Error ? error.message : String(error))
+  // The renderer HTTP transports prefix failures with the response status.
+  // The JSON detail alone is not proof: a proxy may return it with 403/500.
+  return /^404:\s/.test(error instanceof Error ? error.message : String(error))
 }
 
 /**
@@ -59,8 +61,8 @@ function isNotFoundError(error: unknown): boolean {
  * every named profile of this connection. Pin the connection explicitly so an
  * unrelated same-id hint cannot redirect the probe to another backend.
  *
- * `$profiles` is the currently served backend's picker list. If no list has
- * loaded, or the active profile is absent, a missing profile is inconclusive.
+ * A fresh successful roster from this connection and routing epoch is required;
+ * the picker list can be restored from cache after a switch.
  */
 function currentConnectionId(): string | undefined {
   const connection = $connection.get()
@@ -146,7 +148,13 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
     return
   }
 
-  const profiles = [...new Set($profiles.get().map(profile => normalizeProfileKey(profile.name)))]
+  const freshRoster = freshProfileRoster(connectionId)
+
+  if (!freshRoster) {
+    return
+  }
+
+  const profiles = [...new Set(freshRoster.map(profile => normalizeProfileKey(profile.name)))]
   const activeProfile = normalizeProfileKey($activeGatewayProfile.get())
 
   if (profiles.length === 0 || !profiles.includes(activeProfile)) {
@@ -178,10 +186,7 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
         $connection.get() !== connection ||
         currentConnectionId() !== connectionId ||
         normalizeProfileKey($activeGatewayProfile.get()) !== activeProfile ||
-        $profiles
-          .get()
-          .map(profile => normalizeProfileKey(profile.name))
-          .join('\0') !== profiles.join('\0')
+        freshProfileRoster(connectionId) !== freshRoster
       ) {
         return
       }

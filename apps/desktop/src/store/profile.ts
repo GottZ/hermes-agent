@@ -1,6 +1,7 @@
 import { LOCAL_CONNECTION_ID, registryBackendScopeKey } from '@hermes/shared'
 import { atom, batch, computed } from 'nanostores'
 
+import { ambientOwnerConnectionId } from '@/api/client'
 import type { HermesConnection } from '@/global'
 import { getProfiles, hermesApi, setApiRequestProfile, STARTUP_REQUEST_TIMEOUT_MS } from '@/hermes'
 import { isBrowserHostedDesktop } from '@/lib/platform'
@@ -92,6 +93,21 @@ export function setActiveProfile(name: string): void {
 // every in-flight fetch: the response still resolves for its caller, but it
 // no longer writes the shared cache ("guard against the past").
 let profileListEpoch = 0
+let freshProfileList: null | { epoch: number; profiles: ProfileInfo[]; source: string } = null
+
+/** Only an accepted HTTP roster from this source in the current routing epoch
+ * can authorize destructive decisions. The picker may display cached lists. */
+export function freshProfileRoster(connectionId: string): null | ProfileInfo[] {
+  const fresh = freshProfileList
+
+  return fresh?.epoch === profileListEpoch &&
+    fresh.source === connectionId &&
+    ambientOwnerConnectionId() === connectionId &&
+    profileListSource($connection.get()) === connectionId &&
+    $profiles.get() === fresh.profiles
+    ? fresh.profiles
+    : null
+}
 
 export function invalidateProfileListFetches(): void {
   profileListEpoch += 1
@@ -115,6 +131,7 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
   const flight = (async () => {
     const epoch = profileListEpoch
     const source = profileListSource($connection.get())
+    const routedSource = ambientOwnerConnectionId()
     const MAX_RETRIES = 2
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -128,6 +145,10 @@ export function refreshProfiles(): Promise<ProfileInfo[]> {
             }
 
             $profiles.set(profiles)
+            freshProfileList =
+              source !== null && routedSource === source && ambientOwnerConnectionId() === source
+                ? { epoch, profiles, source }
+                : null
           })
         }
 
