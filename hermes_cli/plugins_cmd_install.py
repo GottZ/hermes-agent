@@ -341,7 +341,7 @@ def _refuse_unavailable_portable_plugin(plugin_name: str, tree: Path, app_title:
         from hermes_cli.plugin_catalog_presence import app_guidance
         # The clone itself is authoritative at the publication gate, not an earlier preflight pin.
         # A custom source has no trusted vendor URL; the catalog identity is attached later.
-        entry = SimpleNamespace(name=plugin_name, repo="", title=display_title or plugin_name)
+        entry = SimpleNamespace(name=plugin_name)
         error = _pc().PluginOperationError(f"Can't install plugin '{plugin_name}': {reason}",
                                            failure_class="incompatible")
         error.app_guidance = app_guidance(entry, "uncertain" if result.state == "version_too_old" and not result.version
@@ -841,14 +841,14 @@ def _resolve_source(identifier: str, catalog_name: Optional[str]) -> tuple:
 
 def _app_refusal_result(exc, entry, *, at_reviewed_pin: bool = True) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "error": str(exc)}
-    if guidance := getattr(exc, "app_guidance", None):
+    if guidance := exc.app_guidance:
         from hermes_cli.plugin_catalog_presence import app_guidance
         result["app_guidance"] = (app_guidance(entry, guidance["reason"],
                                   required_version=guidance["required_version"],
                                   found_version=guidance["found_version"],
                                   actual_declaration=exc.app_declaration,
                                   app_title=guidance["app_title"]) if entry and at_reviewed_pin
-                                  and getattr(exc, "app_declaration", None) is not None
+                                  and exc.app_declaration is not None
                                   else {**guidance, "download_url": None,
                                         "app_title": entry.name if entry else guidance["app_title"]})
     return result

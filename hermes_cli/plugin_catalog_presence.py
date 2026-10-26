@@ -216,8 +216,10 @@ def presence(entry: Any) -> Presence:
         return (getattr(entry, "title", "") or entry.name) if app_servers == [name] else entry.name
 
     try:
-        found = [replace(_server_presence(d.declaration, d.liveness, title_for(name)),
-                         app_title=title_for(name)) for name, d in declarations.items()]
+        found = []
+        for name, d in declarations.items():
+            title = title_for(name)
+            found.append(replace(_server_presence(d.declaration, d.liveness, title), app_title=title))
     except Exception:
         logger.debug("plugin catalog presence: %s probe failed", entry.name, exc_info=True)
         return UNKNOWN

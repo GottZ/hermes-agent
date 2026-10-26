@@ -2,7 +2,7 @@ import { JsonRpcGatewayError } from '@hermes/shared'
 
 import type { GatewayRequest } from './agent-plugins'
 
-export type AppBlockerReason = 'missing_app' | 'version_too_old' | 'unsupported_os' | 'unsupported_gpu'
+type AppBlockerReason = 'missing_app' | 'version_too_old' | 'unsupported_os' | 'unsupported_gpu'
 export type AppPresenceReason = AppBlockerReason | 'available' | 'app_not_running' | 'no_requirements' | 'uncertain'
 
 export interface AppGuidance {
@@ -12,6 +12,16 @@ export interface AppGuidance {
   found_version?: string | null
   download_url?: string | null
 }
+
+const BLOCKERS: ReadonlySet<AppPresenceReason> = new Set<AppBlockerReason>([
+  'missing_app',
+  'version_too_old',
+  'unsupported_os',
+  'unsupported_gpu'
+])
+
+/** The two reasons a vendor download fixes; the backend only sends a link for these. */
+const LINKED: ReadonlySet<AppPresenceReason> = new Set<AppBlockerReason>(['missing_app', 'version_too_old'])
 
 const REASONS = new Set<AppPresenceReason>([
   'missing_app',
@@ -100,7 +110,7 @@ export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
   const value = guidance.download_url
 
   if (
-    !['missing_app', 'version_too_old'].includes(guidance.reason) ||
+    !LINKED.has(guidance.reason) ||
     !value ||
     Array.from(value).some(char => /\s/.test(char) || char.charCodeAt(0) < 32) ||
     // The backend refuses any explicit port; the URL parser would silently drop a default ":443".
@@ -135,7 +145,7 @@ export function officialAppDownloadUrl(guidance: AppGuidance): string | null {
 export function isAppBlocked(guidance: AppGuidance | null): boolean {
   return (
     guidance !== null &&
-    (['missing_app', 'version_too_old', 'unsupported_os', 'unsupported_gpu'].includes(guidance.reason) ||
+    (BLOCKERS.has(guidance.reason) ||
       (guidance.reason === 'uncertain' && Boolean(guidance.required_version) && !guidance.found_version))
   )
 }

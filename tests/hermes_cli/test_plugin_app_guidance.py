@@ -28,6 +28,15 @@ def _entry(name="nvidia-app"):
                            sha="0" * 40, subdir="nvidia-app")
 
 
+def _catalog_entry(name, **fields):
+    """A community catalog entry on a GitHub repo pinned at a zero sha, through the production parser."""
+    from hermes_cli import plugin_catalog as catalog
+
+    return catalog.entry_from_mapping({
+        "name": name, "repo": f"https://github.com/fx/{name}", "sha": "0" * 40,
+        "description": f"{name} does things.", "maintainer": "fx", "tier": "community", **fields}, name)
+
+
 def _decl():
     return parse_declaration("test", {"win32": {"presence": "executable", "location": "C:/NVIDIA App.exe", "version": {"kind": "pe_resource"}}},
                              {"app": True, "min_version": "11.0", "gpu": "nvidia"}, where="test")
@@ -269,19 +278,11 @@ def test_no_requirements_alone_remains_unknown(monkeypatch):
     assert found.state == "unknown" and found.reason == "no_requirements"
 
 
-def _github_entry(name):
-    from hermes_cli import plugin_catalog as catalog
-
-    return catalog.entry_from_mapping({
-        "name": name, "repo": f"https://github.com/fx/{name}", "sha": "0" * 40,
-        "description": f"{name} does things.", "maintainer": "fx", "tier": "community"}, name)
-
-
 def test_named_presence_reports_a_plugin_without_app_declaration_as_no_requirements(monkeypatch):
     """The wire row, not just one server: the Desktop must not doubt an app nobody declared."""
     from hermes_cli import plugin_catalog as catalog
 
-    entry = _github_entry("plain")
+    entry = _catalog_entry("plain")
     no_app = {"extensions": {"com.nousresearch.hermes": {"servers": {"srv": {"command": "srv"}}}}}
     monkeypatch.setattr(catalog, "load_catalog_live", lambda: [entry])
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: no_app)
@@ -295,7 +296,7 @@ def test_pin_without_plugin_json_has_no_requirements_but_a_failed_read_stays_unc
 
     from hermes_cli import plugin_catalog as catalog
 
-    entries = [_github_entry("native"), _github_entry("offline")]
+    entries = [_catalog_entry("native"), _catalog_entry("offline")]
 
     def get(url, **_kwargs):
         if "/fx/offline/" in url:
@@ -310,31 +311,23 @@ def test_pin_without_plugin_json_has_no_requirements_but_a_failed_read_stays_unc
     assert rows["offline"]["reason"] == "uncertain"
 
 
-def _titled_entry(name, title):
-    from hermes_cli import plugin_catalog as catalog
-
-    return catalog.entry_from_mapping({
-        "name": name, "repo": f"https://github.com/fx/{name}", "sha": "0" * 40, "title": title,
-        "description": f"{name} does things.", "maintainer": "fx", "tier": "community"}, name)
-
-
-def test_lone_app_requirement_keeps_the_catalog_title_without_annotation(monkeypatch):
+def test_lone_app_requirement_keeps_the_catalog_title(monkeypatch):
     """pay-cli: hard-gated, titled "Pay CLI", no vendor link; the name needs no reviewed link."""
     from hermes_cli import plugin_catalog as catalog
 
-    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_titled_entry("pay-cli", "Pay CLI")])
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_catalog_entry("pay-cli", title="Pay CLI")])
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: _manifest_for("pay-cli"))
     row, = presence.presence_for(["pay-cli"])
     assert row["sentence"] == "needs Pay CLI" and row["app_title"] == "Pay CLI"
     assert row["download_url"] is None
 
 
-def test_several_unannotated_apps_do_not_borrow_the_catalog_title(monkeypatch):
+def test_several_apps_do_not_borrow_the_catalog_title(monkeypatch):
     from hermes_cli import plugin_catalog as catalog
 
     servers = NEEDS_APP["extensions"]["com.nousresearch.hermes"]["servers"]["paint"]
     two_apps = {"extensions": {"com.nousresearch.hermes": {"servers": {"paint": servers, "print": servers}}}}
-    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_titled_entry("studio", "Paint Studio")])
+    monkeypatch.setattr(catalog, "load_catalog_live", lambda: [_catalog_entry("studio", title="Paint Studio")])
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: two_apps)
     row, = presence.presence_for(["studio"])
     assert "Paint Studio" not in row["sentence"] and row["app_title"] == "studio"
@@ -359,9 +352,7 @@ def test_unsupported_platform_sentence_names_the_os_for_people(monkeypatch):
 
     label = {"win32": "Windows", "darwin": "macOS", "linux": "Linux"}[os_family()]
     elsewhere = "linux" if os_family() != "linux" else "windows"
-    entry = catalog.entry_from_mapping({
-        "name": "elsewhere", "repo": "https://github.com/fx/elsewhere", "sha": "0" * 40, "description": "d.",
-        "maintainer": "fx", "tier": "community", "platforms": [elsewhere]}, "elsewhere")
+    entry = _catalog_entry("elsewhere", platforms=[elsewhere])
     monkeypatch.setattr(catalog, "load_catalog_live", lambda: [entry])
     row, = presence.presence_for(["elsewhere"])
     assert row["sentence"] == f"not supported on {label}"
@@ -416,7 +407,7 @@ def test_named_presence_reads_the_live_catalog_once_per_request(monkeypatch):
     from hermes_cli import plugin_catalog as catalog
 
     reviewed = [e for e in catalog.load_catalog() if e.name in ("nvidia-app", "nvidia-broadcast")]
-    entries = [*reviewed, _github_entry("plain")]
+    entries = [*reviewed, _catalog_entry("plain")]
     loads = []
     monkeypatch.setattr(catalog, "load_catalog_live", lambda: loads.append(1) or entries)
     monkeypatch.setattr(presence, "_pinned_manifest", lambda repo, sha, subdir: _manifest_for(subdir or "srv"))
@@ -459,7 +450,8 @@ def test_unsupported_server_takes_priority_over_an_installable_missing_app(monke
     assert found.reason == "unsupported_gpu"
 
 
-def test_install_refusal_never_labels_a_sibling_app_as_reviewed_vendor(monkeypatch, tmp_path):
+def test_install_refusal_gives_no_catalog_app_name_to_a_server_declaring_none(monkeypatch, tmp_path):
+    """The catalog title names the plugin's one declared app, never a server without an app declaration."""
     from hermes_cli import agent_plugins
     from hermes_platform.resolver import availability as availability_mod
 
@@ -640,15 +632,12 @@ def test_disabled_off_pin_tree_without_ref_does_not_gain_reviewed_link(monkeypat
 
 
 def test_connector_card_row_judges_presence_without_reloading_the_catalog(monkeypatch):
-    """tools/connectors/catalog.py resolves the entry from the live catalog already."""
+    """A card row's app state needs no live catalog; only a vendor link is checked against it."""
     from hermes_cli import plugin_catalog as catalog
     from tools.connectors.catalog import _plugin_row
 
     # Carries a reviewed vendor link and runs on every OS, so presence() reaches every server check.
-    reviewed = catalog.entry_from_mapping({
-        "name": "paint", "repo": "https://github.com/fx/paint", "sha": "0" * 40, "title": "Paint Studio",
-        "app_download_url": "https://paint.example/download",
-        "description": "Paints.", "maintainer": "fx", "tier": "community"}, "paint")
+    reviewed = _catalog_entry("paint", title="Paint Studio", app_download_url="https://paint.example/download")
     loads = []
     monkeypatch.setattr(catalog, "load_catalog_live", lambda: loads.append(1) or [reviewed])
     monkeypatch.setattr(presence, "_pinned_manifest", lambda *_: NEEDS_APP)
