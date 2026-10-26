@@ -16,7 +16,13 @@ vi.mock('@/hermes', async importOriginal => {
   }
 })
 
-import { clearSessionDraft, reloadPersistedDrafts, stashSessionDraft, takeSessionDraft } from '@/store/composer'
+import {
+  clearSessionDraft,
+  reloadPersistedDrafts,
+  stashedDraftOwner,
+  stashSessionDraft,
+  takeSessionDraft
+} from '@/store/composer'
 import {
   $queuedPromptsBySession,
   enqueueQueuedPrompt,
@@ -27,6 +33,7 @@ import { wipeSessionListsForGatewaySwitch } from '@/store/gateway-switch'
 import { $pinnedSessionIds } from '@/store/layout'
 import { $activeGatewayProfile, $profiles } from '@/store/profile'
 import { $sessions, _resetSessionOwnerHintsForTests, setConnection, setSessionOwnerHint } from '@/store/session'
+import { $sessionTiles, openSessionTile } from '@/store/session-states'
 
 import { __runDeadSessionPrunePass, resetDeadSessionPrune, watchDeadSessionPrune } from './dead-session-prune'
 
@@ -62,6 +69,7 @@ beforeEach(() => {
   $activeGatewayProfile.set('default')
   getSessionMock.mockReset()
   _resetSessionOwnerHintsForTests({ storage: true })
+  $sessionTiles.set([])
   resetDeadSessionPrune()
 })
 
@@ -136,6 +144,24 @@ describe('__runDeadSessionPrunePass', () => {
 
     expect(takeSessionDraft('dead-draft-session').text).toBe('')
     expect(takeSessionDraft('__new__').text).toBe('brand new')
+  })
+
+  it('keeps a remote tile draft when a stale local hint contradicts its authoritative route', async () => {
+    setSessionOwnerHint('tile-draft', { connectionId: 'local', profile: 'default' })
+    openSessionTile('tile-draft', 'right', undefined, undefined, {
+      workspaceMode: 'sessions',
+      ownerRoute: { connectionId: 'remote-a', profile: 'default' }
+    })
+    stashSessionDraft('tile-draft', 'remote unsent text', [])
+    expect(stashedDraftOwner('tile-draft')).toEqual({ connectionId: 'remote-a', profile: 'default' })
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect(takeSessionDraft('tile-draft').text).toBe('remote unsent text')
+    expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')['tile-draft']).toBe(
+      'remote unsent text'
+    )
   })
 
   it('drops queued prompts for dead sessions and keeps live ones', async () => {
@@ -229,6 +255,40 @@ describe('__runDeadSessionPrunePass', () => {
 
     expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')['race-draft']).toBe(
       'replacement'
+    )
+  })
+
+  it('prunes one dead draft without overwriting an unrelated cross-window draft before its storage event', async () => {
+    setSessionOwnerHint('dead-a', { connectionId: 'local', profile: 'default' })
+    setSessionOwnerHint('other-b', { connectionId: 'local', profile: 'default' })
+    stashSessionDraft('dead-a', 'delete me', [])
+    stashSessionDraft('other-b', 'old B', [])
+    let rejectProbe!: (reason: Error) => void
+    getSessionMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectProbe = reject
+        })
+    )
+    getSessionMock.mockRejectedValue(notFound())
+
+    const pass = __runDeadSessionPrunePass()
+    const texts = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')
+    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ ...texts, 'other-b': 'NEW B' }))
+    const owners = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3.owners') ?? '{}')
+    window.localStorage.setItem(
+      'hermes:composer-drafts:v3.owners',
+      JSON.stringify({ ...owners, 'other-b': { ...owners['other-b'], text: 'NEW B' } })
+    )
+    rejectProbe(notFound())
+    getSessionMock.mockRejectedValue(notFound())
+    await pass
+
+    const persisted = JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3') ?? '{}')
+    expect(persisted['dead-a']).toBeUndefined()
+    expect(persisted['other-b']).toBe('NEW B')
+    expect(JSON.parse(window.localStorage.getItem('hermes:composer-drafts:v3.owners') ?? '{}')['other-b']?.text).toBe(
+      'NEW B'
     )
   })
 

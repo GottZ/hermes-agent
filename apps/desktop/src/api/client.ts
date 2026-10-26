@@ -779,6 +779,11 @@ export function setSessionOwnerResolver(resolver: SessionOwnerResolver | null): 
   _sessionOwnerResolver = resolver
 }
 
+/** Share the session read/dispatch owner ladder with draft stamping. */
+export function sessionOwnerForDraft(id: string): ReturnType<SessionOwnerResolver> {
+  return _sessionOwnerResolver?.(id)
+}
+
 /** The connection pin a session-scoped READ must carry for `id`, or {} when
  *  the caller already pinned a connection, no exact owner is known, or the
  *  owner is the ambient connection. Pins 'local' too (the only way back to

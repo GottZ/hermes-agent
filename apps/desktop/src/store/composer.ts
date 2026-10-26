@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
 
+import { sessionOwnerForDraft } from '@/api/client'
 import type { HermesStagedUpload } from '@/global'
 import { deriveDraftTitle } from '@/lib/draft-title'
 import { triggerHaptic } from '@/lib/haptics'
@@ -532,11 +533,15 @@ function persistDraftTexts() {
 export function stashSessionDraft(scope: string | null | undefined, text: string, attachments: ComposerAttachment[]) {
   const key = draftKey(scope)
   const hints = getSessionOwnerHints(key)
-  const owner = hints.length === 1 ? hints[0] : undefined
+  // Share the production tile → hint → row ladder. A profile-only tile is
+  // unresolved for destructive pruning, even when a stale exact hint exists.
+  const resolved = sessionOwnerForDraft(key)
+  const owner = resolved === undefined ? (hints.length === 1 ? hints[0] : undefined) : resolved
+  const profile = owner && typeof owner === 'object' ? (owner.targetProfile ?? owner.profile) : undefined
   const nextOwners = { ...draftOwners }
 
-  if ((text.trim() || attachments.length > 0) && owner?.connectionId) {
-    nextOwners[key] = { connectionId: owner.connectionId, profile: owner.targetProfile ?? owner.profile, text }
+  if ((text.trim() || attachments.length > 0) && owner && typeof owner === 'object' && owner.connectionId && profile) {
+    nextOwners[key] = { connectionId: owner.connectionId, profile, text }
   } else {
     delete nextOwners[key]
   }
@@ -577,10 +582,13 @@ export function clearSessionDraftIfOwned(scope: string, connectionId: string, pr
   }
 
   try {
-    const persisted = JSON.parse(window.localStorage.getItem(SESSION_DRAFTS_STORAGE_KEY) ?? '{}') as Record<
-      string,
-      string
-    >
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(SESSION_DRAFTS_STORAGE_KEY) ?? '{}')
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return false
+    }
+
+    const persisted = parsed as Record<string, string>
 
     const persistedOwners = loadDraftOwners()
 
@@ -592,11 +600,26 @@ export function clearSessionDraftIfOwned(scope: string, connectionId: string, pr
     ) {
       return false
     }
+
+    // Prune only the checked key in the latest persisted snapshots. A storage
+    // event from another window may not yet have updated our in-memory maps.
+    delete persisted[scope]
+    delete persistedOwners[scope]
+    window.localStorage.setItem(DRAFT_OWNERS_KEY, JSON.stringify(persistedOwners))
+
+    if (Object.keys(persisted).length) {
+      window.localStorage.setItem(SESSION_DRAFTS_STORAGE_KEY, JSON.stringify(persisted))
+    } else {
+      window.localStorage.removeItem(SESSION_DRAFTS_STORAGE_KEY)
+    }
   } catch {
     return false
   }
 
-  clearSessionDraft(scope)
+  draftOwners = { ...draftOwners }
+  delete draftOwners[scope]
+  draftsBySession.delete(scope)
+  publishDraftTitle(scope, '')
 
   return true
 }
