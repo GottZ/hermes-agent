@@ -280,9 +280,18 @@ export function watchDeadSessionPrune(): () => void {
     }
   })
 
+  let disposed = false
+
   return () => {
+    if (disposed) {
+      return
+    }
+
+    disposed = true
     unlistenSessions()
     unlistenRoster()
+    // Cancel the pending pass and invalidate any probe already awaiting the backend.
+    resetDeadSessionPrune()
   }
 }
 

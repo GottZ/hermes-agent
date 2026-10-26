@@ -544,6 +544,74 @@ describe('__runDeadSessionPrunePass', () => {
 })
 
 describe('watchDeadSessionPrune', () => {
+  it('cancels a scheduled prune when disposed, without touching pins, queues or drafts', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      $pinnedSessionIds.set(['disposed-pin'])
+      enqueueQueuedPrompt('disposed-pin', { text: 'pending', attachments: [] })
+      stashSessionDraft('disposed-pin', 'unsent', [])
+      getSessionMock.mockRejectedValue(notFound())
+      $sessions.set([row('unrelated')])
+      expect(vi.getTimerCount()).toBe(1)
+
+      unsubscribe()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      expect(getSessionMock).not.toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual(['disposed-pin'])
+      expect(getQueuedPrompts('disposed-pin').map(entry => entry.text)).toEqual(['pending'])
+      expect(takeSessionDraft('disposed-pin').text).toBe('unsent')
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
+  it('discards an in-flight dead verdict when disposed, and a new watcher can start fresh', async () => {
+    vi.useFakeTimers()
+    const unsubscribe = watchDeadSessionPrune()
+
+    try {
+      $pinnedSessionIds.set(['in-flight-pin'])
+      let rejectProbe!: (reason: Error) => void
+      getSessionMock.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectProbe = reject
+          })
+      )
+      getSessionMock.mockRejectedValue(notFound())
+      $sessions.set([row('unrelated')])
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(getSessionMock).toHaveBeenCalledTimes(1)
+
+      unsubscribe()
+      rejectProbe(notFound())
+      await vi.waitFor(() => expect(getSessionMock).toHaveBeenCalledTimes(2))
+      expect($pinnedSessionIds.get()).toEqual(['in-flight-pin'])
+
+      const nextUnsubscribe = watchDeadSessionPrune()
+
+      try {
+        $sessions.set([row('fresh-payload')])
+        expect(vi.getTimerCount()).toBe(1)
+        unsubscribe() // A repeated disposal must not cancel the new watcher's pass.
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect($pinnedSessionIds.get()).toEqual([])
+      } finally {
+        nextUnsubscribe()
+      }
+    } finally {
+      unsubscribe()
+      resetDeadSessionPrune()
+      vi.useRealTimers()
+    }
+  })
+
   it('retries the pin pass when a fresh roster arrives after the first sweep without a new sidebar list', async () => {
     vi.useFakeTimers()
     const unsubscribe = watchDeadSessionPrune()
