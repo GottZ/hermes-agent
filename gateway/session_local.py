@@ -24,11 +24,21 @@ class LocalSessionAdapter(BasePlatformAdapter):
     def __init__(self, authority):
         super().__init__(PlatformConfig(enabled=True), Platform.LOCAL)
         self.authority = authority
+        # Built outside ``_create_adapter``: without its runner a push wake skips the authority FIFO
+        # and falls to a message handler this adapter never has (``deliver_wake``).
+        self.gateway_runner = getattr(authority, 'runner', None)
         self.sources = {}
         self.policies = {}
 
+    @staticmethod
+    def _source_key(source):
+        # A conversation its chat moved past keeps the chat's id, which every other one of that chat
+        # shares: its own key names it (gateway/session_detached.py).
+        from gateway.session_detached import detached_route_of
+        return detached_route_of(source) or source.chat_id
+
     def authorize_source(self, source):
-        saved = self.sources.get(source.chat_id)
+        saved = self.sources.get(self._source_key(source))
         if saved is None:
             return False
         original, identity = saved
@@ -40,7 +50,7 @@ class LocalSessionAdapter(BasePlatformAdapter):
         return source.platform, source.chat_id, source.user_id, source.profile, source.chat_type
 
     def register_source(self, source):
-        self.sources[source.chat_id] = source, self._identity(source)
+        self.sources[self._source_key(source)] = source, self._identity(source)
 
     async def connect(self, *, is_reconnect=False):
         return True
