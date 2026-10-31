@@ -132,7 +132,7 @@ function collectCandidates(): string[] {
   })
 }
 
-function dropDeadId(id: string): void {
+function dropDeadId(id: string, connectionId: string, probedProfiles: number): void {
   // Cheap re-verification before destructive drops: if a row for this id
   // appeared while the probe was in flight (a session resurrected or a slow
   // page landed), the id is no longer dead — keep every entry.
@@ -148,6 +148,12 @@ function dropDeadId(id: string): void {
   if ($pinnedSessionIds.get().includes(id)) {
     forgetPinSyncState(id)
     unpinSession(id)
+    // The one destructive step this module takes leaves a trace in desktop.log
+    // (id and verdict basis only, never content), so a vanished pin can be tied
+    // to this sweep instead of being inferred from timestamps (#144702).
+    window.hermesDesktop?.logLine?.(
+      `[dead-session-prune] unpinned ${id}: 404 on ${String(probedProfiles)} profile(s) of connection "${connectionId}"`
+    )
   }
 }
 
@@ -216,7 +222,7 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
       if (verdict === 'alive') {
         alive.set(id, Date.now() + ALIVE_TTL_MS)
       } else if (verdict === 'dead') {
-        dropDeadId(id)
+        dropDeadId(id, connectionId, profiles.length)
       }
       // 'unknown' — neither cached nor dropped; a later sweep retries it.
     })
