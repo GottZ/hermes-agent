@@ -297,8 +297,9 @@ describe('__runDeadSessionPrunePass', () => {
   })
 
   it('preserves a legacy draft when a later hint cannot establish its original owner', async () => {
-    window.localStorage.setItem('hermes:composer-drafts:v3', JSON.stringify({ 'legacy-draft': 'keep unsent' }))
-    // Reload through the public draft-sync path, not by writing module internals.
+    // Saved before any owner hint existed, through the production write path (the
+    // v4 stash is the authority; a raw v3 list is only adopted at module load).
+    stashSessionDraft('legacy-draft', 'keep unsent', [])
     reloadPersistedDrafts()
     setSessionOwnerHint('legacy-draft', { connectionId: 'local', profile: 'default' })
     getSessionMock.mockRejectedValue(notFound())

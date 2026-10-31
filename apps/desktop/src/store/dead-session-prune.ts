@@ -10,8 +10,12 @@
  * selected connection. A 404 proves nothing about another gateway. Global
  * drafts and queued prompts are NEVER auto-pruned: their shared localStorage
  * maps cannot atomically delete one entry without losing another window's write.
- * Any non-404 probe failure (gateway mid-restart, network) is inconclusive:
- * the id is deferred to a later pass instead of being dropped.
+ * Interrupted sends (`hermes:composer-outbox:v1:*`) are one key per entry, so
+ * a drop would be atomic — but those keys carry no connection scope either, and
+ * a 404 from the selected connection cannot prove one dead; they are left to
+ * the outbox's own expiry. Any non-404 probe failure (gateway mid-restart,
+ * network) is inconclusive: the id is deferred to a later pass instead of
+ * being dropped.
  */
 
 import { getSession } from '@/hermes'
