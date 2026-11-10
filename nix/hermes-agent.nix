@@ -43,8 +43,8 @@
   dirty ? false,
   lastModified ? null,
   # Overridable parameters
-  version ? "0.0.0",
-  distance ? 0,
+  version ? "0.23.0",
+  distance ? 2606,
   extraPythonPackages ? [ ],
   # The optional groups this variant ships; packages.nix owns the lists.
   defaultDependencyGroups ? [ ],
